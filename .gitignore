@@ -6,3 +6,6 @@ dist/
 *.tsbuildinfo
 .env*
 !.env.example
+technical-docs/
+.DS_Store
+*.pem

@@ -1,0 +1,135 @@
+name: Backend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Validate frontend and backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        run: bun run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: bun install --frozen-lockfile
+
+      - name: Type-check backend
+        working-directory: backend
+        run: bun run check
+
+      - name: Test backend
+        working-directory: backend
+        run: bun test
+        env:
+          DATABASE_URL: postgresql://guildhall:guildhall@127.0.0.1:5432/guildhall
+          SOLANA_CLUSTER: devnet
+          SOLANA_RPC_URL: https://api.devnet.solana.com
+          DATA_ENCRYPTION_KEY: guildhall-ci-only-encryption-key-not-for-production
+
+  build-push:
+    name: Build and publish backend image
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'notadeveloper7/guildhall'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image name
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/guildhall-backend" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Build and publish
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+
+  release:
+    name: Create backend release
+    needs: build-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'notadeveloper7/guildhall'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create release tag
+        id: tag
+        run: |
+          tag="backend-$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::7}"
+          git tag "$tag"
+          git push origin "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release notes
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+
+  deploy:
+    name: Trigger backend deployment
+    needs: release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'notadeveloper7/guildhall'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call backend deploy hook when configured
+        env:
+          BACKEND_DEPLOY_HOOK_URL: ${{ secrets.BACKEND_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$BACKEND_DEPLOY_HOOK_URL" ]; then
+            echo "BACKEND_DEPLOY_HOOK_URL is not configured; skipping backend deploy hook."
+            exit 0
+          fi
+          curl --fail --silent --show-error --retry 3 -X POST "$BACKEND_DEPLOY_HOOK_URL" \
+            || echo "Backend deploy hook could not be reached; image and release remain available."
