@@ -23,7 +23,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <head><link rel="preload" href="/fonts/hardbop-bold.woff2" as="font" type="font/woff2" crossOrigin="anonymous"/><link rel="preload" href="/fonts/guild-font-5.ttf" as="font" type="font/ttf" crossOrigin="anonymous"/><link rel="preload" href="/fonts/guild-font-0.ttf" as="font" type="font/ttf" crossOrigin="anonymous"/></head>
+      <head><link rel="stylesheet" href="/fonts/fonts.css"/><link rel="preload" href="/fonts/hardbop-bold.woff2" as="font" type="font/woff2" crossOrigin="anonymous"/><link rel="preload" href="/fonts/guild-font-5.ttf" as="font" type="font/ttf" crossOrigin="anonymous"/><link rel="preload" href="/fonts/guild-font-0.ttf" as="font" type="font/ttf" crossOrigin="anonymous"/></head>
       <body className="antialiased"><GuildPreloader/><InkCursor/><MotionSystem/><div id="guildhall-site">{children}</div></body>
     </html>
   );
