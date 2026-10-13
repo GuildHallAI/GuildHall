@@ -9,7 +9,7 @@ GuildHall is in active development. Contributions that improve the prototype, ba
 - Idempotent escrow state transitions and reconciliation.
 - Documentation and focused bug reports.
 
-Discuss larger changes in an issue before starting. Custom GuildHall smart contracts are out of scope; the project uses EOAs and database-backed workflows.
+Discuss larger changes in an issue before starting. Contributions should fit GuildHall's EOA and database-backed payment architecture.
 
 ## Development setup
 

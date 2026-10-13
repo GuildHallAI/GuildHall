@@ -1,6 +1,6 @@
 # GuildHall backend
 
-The API is an off-chain service for wallet sessions, commission records, escrow EOAs, and the searchable work index. It uses a separate EOA for each commission; the API encrypts those private keys before storing them in Postgres. The gas payer EOA funds transaction fees. There are no GuildHall on-chain programs or contracts.
+The API is an off-chain service for wallet sessions, commission records, escrow EOAs, and the searchable work index. It uses a separate EOA for each commission; the API encrypts those private keys before storing them in Postgres. The gas payer EOA funds transaction fees. Payment workflows are handled through EOAs and PostgreSQL.
 
 The first server scaffold exposes `/health` for process liveness and `/ready` for Postgres and Solana RPC checks. Product routes, migrations, wallet sign-in, and commission escrow lifecycle handling are the next implementation steps.
 

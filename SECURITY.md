@@ -19,10 +19,10 @@ In scope:
 
 Out of scope:
 
-- Third-party services and infrastructure that GuildHall does not operate.
+- Issues isolated to upstream third-party services; please report those to the relevant provider.
 - Denial-of-service testing, spam, or social engineering.
 - Vulnerabilities in Solana, wallets, RPC providers, or external token programs without a GuildHall-specific impact.
-- Smart contracts or on-chain programs: GuildHall does not deploy custom contracts.
+- On-chain programs outside the GuildHall application and its EOA payment flows.
 
 ## Project-specific areas to review
 
@@ -35,7 +35,3 @@ Out of scope:
 ## Research expectations
 
 Please act in good faith, avoid accessing or modifying other users’ data, and do not move funds or disrupt service. If you follow this policy, make a reasonable effort to avoid privacy violations and promptly report findings, GuildHall will not pursue legal action for your research. We will credit reporters who request recognition, subject to their consent and applicable law.
-
-## Deployed contracts
-
-GuildHall has no custom deployed contracts or program addresses to report.
