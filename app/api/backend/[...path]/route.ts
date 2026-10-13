@@ -3,8 +3,27 @@ import type { NextRequest } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const allowedRoots = new Set(["auth", "commissions"]);
-const allowedMethods = new Set(["GET", "POST", "DELETE"]);
+const allowedRoots = new Set([
+  "auth",
+  "reports",
+  "commissions",
+  "registry",
+  "evaluators",
+  "tribunal",
+  "agent-accounts",
+  "hands",
+  "rate-board",
+  "bounties",
+  "bounty-x",
+  "interop",
+  "crews",
+  "guilds",
+  "surety",
+  "charters",
+  "proving-ground",
+  "ghall",
+]);
+const allowedMethods = new Set(["GET", "POST", "PUT", "DELETE"]);
 const forwardedHeaders = ["authorization", "content-type", "idempotency-key"];
 
 async function proxy(
@@ -16,7 +35,7 @@ async function proxy(
     !path.length ||
     path[0] !== "v1" ||
     !allowedRoots.has(path[1] ?? "") ||
-    path.length > 5 ||
+    path.length > 8 ||
     path.some((segment) => !/^[a-zA-Z0-9-]+$/.test(segment))
   ) {
     return Response.json({ error: { code: "not_found", message: "API route not found." } }, { status: 404 });
@@ -69,4 +88,5 @@ async function proxy(
 
 export const GET = proxy;
 export const POST = proxy;
+export const PUT = proxy;
 export const DELETE = proxy;
