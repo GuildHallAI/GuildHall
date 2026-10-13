@@ -1,0 +1,106 @@
+/* A candlelit crossing: the brand sigil emerges from darkness, without HUD rings. */
+.guild-preloader.guild-entrance{animation:none;will-change:opacity}
+.guild-entrance[data-phase=leaving]{opacity:1;pointer-events:auto;animation:entrance-cover .14s ease-out both}
+.guild-entrance[data-phase=arriving]{opacity:0;pointer-events:none;transition:opacity .2s ease}
+@keyframes entrance-cover{from{opacity:0}to{opacity:1}}
+.guild-passage{background:#050505;isolation:isolate;overflow:hidden;animation:none;will-change:opacity}
+.guild-passage:before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 47%,#32291422,transparent 50%),url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Cpath fill='%23fff' opacity='.06' filter='url(%23n)' d='M0 0h160v160H0z'/%3E%3C/svg%3E");opacity:.4;pointer-events:none}
+.guild-passage[data-phase=leaving]{opacity:1;pointer-events:auto;animation:entrance-cover .14s cubic-bezier(.22,1,.36,1) both}
+.guild-passage[data-phase=arriving]{animation:apparition-depart .24s cubic-bezier(.4,0,.25,1) both;pointer-events:none}
+.passage-apparition{position:relative;width:clamp(200px,23vw,320px);height:clamp(200px,23vw,320px);display:grid;place-items:center}
+.passage-sigil,.passage-echo{position:absolute;width:100%;height:100%;object-fit:contain;will-change:transform;animation:haunted-sigil-turn 16s linear infinite;animation-delay:var(--passage-offset,0s)}
+.passage-sigil{filter:saturate(.58);opacity:.84}
+.passage-echo{width:108%;height:108%;opacity:.07;filter:grayscale(1);animation-direction:reverse;animation-duration:23s}
+.passage-haze{position:absolute;inset:12%;background:radial-gradient(ellipse,#c4a6510f,transparent 66%);transform:scale(1.7)}
+.passage-whisper{position:absolute;top:calc(100% + 20px);width:280px;text-align:center;font:24px/1.4 'Pirata One',serif;letter-spacing:.03em;color:#a29b88;opacity:.65}
+@keyframes haunted-sigil-turn{from{transform:rotate(-18deg)}to{transform:rotate(342deg)}}
+@keyframes apparition-depart{0%,10%{opacity:1}100%{opacity:0}}
+
+/* The provided brush simulation stays transparent, click-through and below transitions. */
+.guild-ink-trail{position:fixed;inset:0;width:100%;height:100%;z-index:9990;pointer-events:none;opacity:0;contain:strict}
+@media(hover:hover) and (pointer:fine){html,body,body a,body button,body [role=button],body [role=combobox],body .card-scene,body .card-scene canvas{cursor:url('/assets/plume-pen.svg') 3 46,auto}body input,body textarea,body [contenteditable=true]{cursor:text}}
+@media(hover:none),(pointer:coarse){.guild-ink-trail{display:none}}
+
+/* Five earned seals, arranged as a gothic altarpiece around the paid-work record. */
+.charter-reliquary{position:relative;background:#090909;color:#efece3;padding:95px max(5vw,24px) 76px;overflow:hidden;isolation:isolate;border-block:1px solid #b9ad8628;scroll-margin-top:70px}
+.charter-reliquary:before{content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 50% 40%,#bbab6020,transparent 55%)}
+.reliquary-title{text-align:center;max-width:780px;margin:0 auto 58px}
+.reliquary-title>.gothic-icon{display:block;margin:0 auto 20px;color:#d2c39b}
+.reliquary-title .eyebrow{display:block;font-size:12px;letter-spacing:.18em;color:#9c9789}
+.reliquary-title h2{font:clamp(65px,7.6vw,112px)/1.08 'Pirata One',serif;letter-spacing:-.01em;margin:22px 0 25px}
+.reliquary-title h2 em{font-style:normal;color:#e9e4d8}
+.reliquary-title p{font-size:17px;line-height:1.8;color:#b5b0a4}
+.reliquary-register{max-width:1240px;margin:auto auto 36px;display:flex;justify-content:space-between;align-items:center;gap:24px;padding:20px 0;border-block:1px solid #e6e1d326}
+.reliquary-register>div:first-child{display:grid;gap:7px}
+.reliquary-register span{font:24px 'Pirata One',serif}
+.reliquary-register b{font-size:14px;font-weight:400;color:#969184}
+.reliquary-register .guild-select{min-width:195px;background:#11110e!important;border-color:#93896b77;color:#eee5d4;border-radius:0;font-family:'Pirata One',serif}
+.reliquary-register .guild-select span{font-size:24px}
+.reliquary-seals{max-width:1240px;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:15px;margin:0 auto 44px;perspective:1200px}
+.relic-panel{position:relative;min-width:0;display:flex;flex-direction:column;align-items:center;text-align:center;padding:26px 15px 24px;min-height:385px;border:1px solid #8c826144;border-radius:48% 48% 2px 2px / 25% 25% 2px 2px;background:linear-gradient(110deg,#141411,#080909 72%);box-shadow:inset 0 0 0 5px #080909,inset 0 0 0 6px #9a91721f;transform-origin:50% 90%;animation:relic-unfold .8s cubic-bezier(.16,1,.3,1) backwards;transition:transform .65s cubic-bezier(.16,1,.3,1),border-color .5s,background .5s}
+.relic-panel:after{content:'';position:absolute;inset:5px;background:url('/assets/gothic-corners.svg') center/100% 100% no-repeat;opacity:.18;pointer-events:none}
+.relic-panel:hover{transform:translateY(-9px) rotateY(-4deg);border-color:#b6a36a99}
+.relic-number{font:16px Georgia,serif;letter-spacing:.12em;color:#b5ad96;z-index:1}
+.relic-emblem{height:103px;display:grid;place-items:center;color:#aba79b;transition:transform .7s,color .5s}
+.is-sealed .relic-emblem{color:#dfd6bd}.relic-panel:hover .relic-emblem{transform:translateY(-3px) rotate(-8deg);color:#f6c544}
+.relic-panel h3{font:clamp(27px,2.4vw,37px)/1.18 'Pirata One',serif;margin:8px 0 10px}
+.relic-panel p{font-size:13px;line-height:1.5;color:#b0aa9b;min-height:20px;margin:0 0 20px}
+.relic-panel>strong{font:39px/1.1 'Pirata One',serif;color:#f2eee2;font-weight:400}
+.relic-threshold{font-size:12px;color:#928b7e;margin:8px 0 25px}
+.relic-verdict{display:flex;align-items:center;justify-content:center;gap:7px;font-size:12px;margin-top:auto;color:#969083}
+.is-sealed .relic-verdict{color:#d9bb63}.is-unsealed{border-color:#78736733}.is-unsealed .relic-emblem{opacity:.5}
+.reliquary-verdict{max-width:1240px;display:grid;grid-template-columns:86px 1fr auto;gap:26px;align-items:center;margin:auto;border-top:1px solid #e1d4ad38;padding:30px 0 0}
+.reliquary-medallion{display:grid;place-items:center;width:86px;height:86px;color:#8f8775;transform:rotate(-8deg)}.reliquary-medallion.complete{color:#f6c544}
+.reliquary-verdict .eyebrow{font-size:11px;letter-spacing:.12em;color:#c6b67f}
+.reliquary-verdict h3{font:clamp(27px,3vw,39px)/1.2 'Pirata One',serif;margin:9px 0}
+.reliquary-verdict p{font-size:14px;line-height:1.7;color:#999386;max-width:570px}
+.reliquary-verdict .join-panel{min-width:235px;font-size:16px;padding:22px;display:flex;gap:20px;justify-content:space-between}
+@keyframes relic-unfold{from{opacity:0;transform:translateY(20px) rotateY(-14deg)}to{opacity:1;transform:translateY(0) rotateY(0)}}
+@media(max-width:1000px){.reliquary-seals{grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.relic-panel{min-height:365px}.reliquary-verdict{grid-template-columns:70px 1fr}.reliquary-verdict .join-panel{grid-column:2;justify-self:start}.relic-panel h3{font-size:32px}}
+@media(max-width:600px){.charter-reliquary{padding:60px 18px 48px}.reliquary-title{margin-bottom:34px}.reliquary-title h2{font-size:66px;line-height:1.1}.reliquary-title p{font-size:15px}.reliquary-title .eyebrow{font-size:10px}.reliquary-register{display:grid;gap:18px}.reliquary-register .guild-select{width:100%}.reliquary-register b{font-size:13px}.reliquary-seals{grid-template-columns:1fr 1fr;gap:12px}.relic-panel{min-height:340px;padding:24px 9px 20px}.relic-panel:last-child{grid-column:1/-1;width:calc(50% - 6px);justify-self:center}.relic-emblem{height:85px}.relic-emblem svg{width:54px;height:54px}.relic-panel h3{font-size:28px}.relic-panel p{font-size:12px;min-height:36px;margin-bottom:12px}.relic-panel>strong{font-size:35px}.relic-threshold{font-size:11px}.relic-verdict{font-size:11px}.reliquary-verdict{grid-template-columns:1fr;gap:16px;text-align:center}.reliquary-medallion{margin:auto}.reliquary-verdict .join-panel{grid-column:auto;justify-self:center}.reliquary-verdict h3{font-size:35px}.reliquary-verdict p{font-size:13px}.passage-whisper{font-size:22px}}
+@media(prefers-reduced-motion:reduce){.guild-preloader,.guild-passage[data-phase],.guild-entrance[data-phase],.passage-sigil,.passage-echo{animation:none!important;transition:none!important}.guild-passage[data-phase=arriving],.guild-entrance[data-phase=arriving]{opacity:0}.guild-ink-trail{display:none}.relic-panel{animation:none;transition:none}.relic-panel:hover,.relic-panel:hover .relic-emblem{transform:none}.relic-emblem{transition:none}}
+
+/* Sheets share the reference's corner pivot and horizontal entry, on touch too. */
+.follow-chapter{height:calc(var(--sheet-height,100svh) + 100svh);margin-bottom:-100svh}
+.follow-sheet{transform-origin:0 0;transform:translate3d(var(--entry-shift,0%),0,0) rotate(var(--entry-angle,0deg));box-shadow:0 -1px 0 #ffffff1c,0 -16px 38px #00000018;backface-visibility:hidden}
+.follow-hero .follow-sheet{box-shadow:none}
+.follow-join-chapter .follow-sheet{display:block;height:auto;min-height:100svh;padding:0;top:min(0px,calc(100svh - var(--sheet-height,100svh)))}
+.hero-wordmark{animation:wordmark-unfold .85s cubic-bezier(.2,.7,.2,1) both}
+.hero-wordmark svg{opacity:1}
+.follow-hero .card-scene>canvas{animation:ribbon-enter-refined 1s .05s cubic-bezier(.2,.7,.2,1) both}
+.card-scene canvas,.scene-fallback{transition:opacity .25s ease}
+.guild-preloader-symbols .guild-preloader-symbol{animation-duration:.85s;animation-delay:calc(var(--symbol,0)*.17s)!important}
+.charter-offer.primary .join-panel{color:#fff;background:#111}
+.charter-offer.primary .join-panel:hover{color:#fff;background:#242424}
+.charter-offer.primary .join-panel:hover:before{border-color:#fff6}
+@media(max-width:700px){
+ /* Both faces contribute to the card height, so every mobile paragraph fits. */
+ .follow-centralize .follow-sheet{display:block;height:auto;min-height:110svh;padding:82px 16px calc(114px + env(safe-area-inset-bottom))}
+ .follow-centralize .follow-half{width:100%}
+ .follow-centralize .centralize-copy>div{position:relative;margin:28px 0 20px;gap:18px}
+ .follow-centralize .feature-flips{height:auto;border-left:0;border-top:0!important;margin-top:0!important;padding:20px 0 0!important}
+ .flip-grid{height:auto;max-height:none;grid-template-rows:auto;align-items:stretch}
+ .flip-inner{display:grid}
+ .flip-face{position:relative;inset:auto;grid-area:1/1;min-width:0;min-height:250px;gap:16px;padding:16px}
+ .flip-face small{flex-shrink:0}
+ .flip-back>span{min-width:0;font-size:16px;line-height:1.4;overflow-wrap:anywhere}
+ .follow-chapter{height:calc(var(--sheet-height,100svh) + 100svh);margin-bottom:-100svh;pointer-events:none}
+ .follow-sheet{position:sticky;top:min(0px,calc(100svh - var(--sheet-height,100svh)));transform:translate3d(var(--entry-shift,0%),0,0) rotate(var(--entry-angle,0deg))!important;pointer-events:auto;will-change:transform}
+ .follow-hero .follow-sheet{height:100svh;min-height:560px}
+ .hero-wordmark{top:calc(var(--header) + 14px);left:16px;width:calc(100% - 32px);animation-duration:.65s}
+ .hero-wordmark .hero-title-mobile{height:clamp(280px,46svh,388px)}
+ .follow-hero .card-scene{display:none}
+ .follow-hero-caption{left:16px;right:16px;bottom:calc(105px + env(safe-area-inset-bottom));text-align:right}
+ .follow-hero-caption p{font-size:clamp(20px,5.35vw,25px);line-height:1.12}
+ .follow-fixed-cta{bottom:calc(14px + env(safe-area-inset-bottom))}
+ .follow-home:has(.follow-hero .follow-sheet) .follow-fixed-cta{left:16px;right:16px;width:calc(100% - 32px);max-width:none;height:68px;font-size:26px}
+}
+@media(max-width:700px) and (max-height:650px){
+ .hero-wordmark .hero-title-mobile{height:270px}
+ .follow-hero-caption{bottom:98px}
+ .follow-hero-caption p{font-size:19px}
+}
+@media(prefers-reduced-motion:reduce){
+ .follow-sheet{transform:none!important;will-change:auto}
+ .hero-wordmark,.follow-hero .card-scene>canvas{animation:none!important}
+}

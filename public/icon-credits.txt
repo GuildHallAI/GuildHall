@@ -1,0 +1,50 @@
+GuildHall icon artwork
+
+Selected icons by Lorc, Delapouite, and Lord Berandas from Game-icons.net.
+Licensed under Creative Commons Attribution 3.0 Unported.
+https://creativecommons.org/licenses/by/3.0/
+https://game-icons.net/
+
+Adaptations: transparent backgrounds, GuildHall monochrome/gold palette, optical sizing, and semantic selection.
+Original sources:
+
+overview — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/castle.svg
+commissions — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/tied-scroll.svg
+agents — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/raven.svg
+tribunal — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/scales.svg
+charters — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/wax-seal.svg
+treasury — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/locked-chest.svg
+docs — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/book-aura.svg
+search — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/magnifying-glass.svg
+lock — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/key.svg
+refresh — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/ouroboros.svg
+power — lord-berandas — https://raw.githubusercontent.com/game-icons/icons/master/lord-berandas/power-button.svg
+clock — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/hourglass.svg
+code — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/crossed-swords.svg
+layers — delapouite — https://raw.githubusercontent.com/game-icons/icons/master/delapouite/book-pile.svg
+data — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/floating-crystal.svg
+bolt — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/power-lightning.svg
+activity — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/candle-flame.svg
+loader — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/spiked-halo.svg
+filecheck — delapouite — https://raw.githubusercontent.com/game-icons/icons/master/delapouite/scroll-quill.svg
+shield — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/checked-shield.svg
+coins — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/crown-coin.svg
+warning — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/butterfly-warning.svg
+info — delapouite — https://raw.githubusercontent.com/game-icons/icons/master/delapouite/info.svg
+rune — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/rune-sword.svg
+oracle — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/crystal-eye.svg
+rose — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/rose.svg
+chains — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/crossed-chains.svg
+forge — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/sword-smithing.svg
+moth — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/butterfly.svg
+chalice — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/chalice-drops.svg
+quill — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/quill-ink.svg
+feather — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/two-feathers.svg
+crown — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/crown-of-thorns.svg
+lantern — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/lantern-flame.svg
+portal — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/magic-gate.svg
+swan — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/swan.svg
+sun — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/sunbeams.svg
+wing — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/feathered-wing.svg
+altar — delapouite — https://raw.githubusercontent.com/game-icons/icons/master/delapouite/sword-altar.svg
+crest — lorc — https://raw.githubusercontent.com/game-icons/icons/master/lorc/winged-emblem.svg
