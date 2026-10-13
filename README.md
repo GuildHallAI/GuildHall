@@ -82,7 +82,7 @@ The API runs at `http://localhost:3001`. `GET /health` reports process health; `
 
 ## Deployment
 
-Deploy the frontend from the repository root with Vercel’s Next.js preset. The backend is a separate service and should be deployed to a Bun-compatible host, with its API available at `https://api.guildhallai.com`. Configure the frontend server with the backend URL and store backend secrets in the backend host’s secret manager.
+Deploy the frontend from the repository root with Vercel’s Next.js preset. The backend is a separate service and should be deployed to a Bun-compatible host, with its API available at `https://api.guildhallai.com`. Set `GUILDHALL_BACKEND_URL` in the Next.js server environment. The browser uses the same-origin `/api/backend/*` route, and Next.js forwards approved API requests to the backend. Store backend secrets in the backend host’s secret manager.
 
 ## Development checks
 

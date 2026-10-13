@@ -1,7 +1,10 @@
 import express from "express";
 import { pool } from "./db/index.js";
 import { config } from "./config.js";
+import { authRouter } from "./routes/auth.js";
+import { commissionsRouter } from "./routes/commissions.js";
 import { healthRouter } from "./routes/health.js";
+import { errorHandler } from "./http.js";
 
 const app = express();
 
@@ -10,6 +13,8 @@ app.set("trust proxy", config.TRUST_PROXY);
 app.use(express.json({ limit: "64kb" }));
 
 app.use("/health", healthRouter);
+app.use("/v1/auth", authRouter);
+app.use("/v1/commissions", commissionsRouter);
 
 app.get("/ready", async (_request, response) => {
   const checks: Record<string, "ok" | "error"> = {
@@ -50,5 +55,7 @@ app.get("/ready", async (_request, response) => {
     checks,
   });
 });
+
+app.use(errorHandler);
 
 export { app };
