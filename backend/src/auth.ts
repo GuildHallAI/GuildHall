@@ -134,6 +134,18 @@ export async function createWalletSession(input: unknown) {
   }
 }
 
+export async function resolveWalletSession(token: string) {
+  const result = await pool.query<{ user_id: string; wallet_address: string }>(
+    `SELECT s.user_id, u.wallet_address
+       FROM sessions s JOIN wallet_users u ON u.id = s.user_id
+      WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`,
+    [hashSessionToken(token)],
+  );
+  return result.rows[0]
+    ? { userId: result.rows[0].user_id, walletAddress: result.rows[0].wallet_address }
+    : null;
+}
+
 declare global {
   namespace Express {
     interface Request {
@@ -146,14 +158,9 @@ export async function requireAuth(request: Request, _response: Response, next: N
   try {
     const bearer = request.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     if (!bearer) throw new ApiError(401, "unauthenticated", "A bearer session token is required.");
-    const result = await pool.query<{ user_id: string; wallet_address: string }>(
-      `SELECT s.user_id, u.wallet_address
-       FROM sessions s JOIN wallet_users u ON u.id = s.user_id
-       WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`,
-      [hashSessionToken(bearer)],
-    );
-    if (!result.rowCount) throw new ApiError(401, "invalid_session", "This session is invalid or expired.");
-    request.auth = { userId: result.rows[0].user_id, walletAddress: result.rows[0].wallet_address };
+    const session = await resolveWalletSession(bearer);
+    if (!session) throw new ApiError(401, "invalid_session", "This session is invalid or expired.");
+    request.auth = session;
     next();
   } catch (error) {
     next(error);

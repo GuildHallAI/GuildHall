@@ -4,6 +4,19 @@ import { pool } from "./index.js";
 
 const migrationsDirectory = resolve(import.meta.dir, "../../db/migrations");
 
+async function migrationNames() {
+  return (await readdir(migrationsDirectory))
+    .filter((file) => /^\d+_[a-z0-9_-]+\.sql$/.test(file))
+    .sort();
+}
+
+export async function migrationStatus() {
+  const expected = await migrationNames();
+  const result = await pool.query<{ name: string }>("SELECT name FROM schema_migrations");
+  const applied = new Set(result.rows.map((row) => row.name));
+  return { pending: expected.filter((name) => !applied.has(name)) };
+}
+
 export async function migrate() {
   const client = await pool.connect();
   try {
@@ -15,9 +28,7 @@ export async function migrate() {
       )
     `);
 
-    const files = (await readdir(migrationsDirectory))
-      .filter((file) => /^\d+_[a-z0-9_-]+\.sql$/.test(file))
-      .sort();
+    const files = await migrationNames();
 
     for (const name of files) {
       const applied = await client.query("SELECT 1 FROM schema_migrations WHERE name = $1", [name]);

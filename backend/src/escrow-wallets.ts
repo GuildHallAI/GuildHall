@@ -53,6 +53,18 @@ function encryptSecret(secret: Uint8Array) {
   return { ciphertext, nonce, authTag: cipher.getAuthTag() };
 }
 
+export function createEncryptedSolanaWallet() {
+  const wallet = generateSolanaKeypair();
+  const encrypted = encryptSecret(wallet.secretKey);
+  return {
+    publicKey: wallet.address,
+    encryptedSecretKey: encrypted.ciphertext,
+    encryptionNonce: encrypted.nonce,
+    encryptionAuthTag: encrypted.authTag,
+    encryptionKeyVersion: ENCRYPTION_KEY_VERSION,
+  };
+}
+
 export function decryptCommissionSecretKey(input: {
   ciphertext: Uint8Array;
   nonce: Uint8Array;
@@ -65,6 +77,15 @@ export function decryptCommissionSecretKey(input: {
   const decipher = createDecipheriv("aes-256-gcm", encryptionKey, input.nonce);
   decipher.setAuthTag(input.authTag);
   return Buffer.concat([decipher.update(input.ciphertext), decipher.final()]);
+}
+
+export function decryptSolanaSecretKey(input: {
+  ciphertext: Uint8Array;
+  nonce: Uint8Array;
+  authTag: Uint8Array;
+  keyVersion: number;
+}) {
+  return decryptCommissionSecretKey(input);
 }
 
 /**
@@ -81,8 +102,7 @@ export async function createCommissionEscrowWallet(
   );
   if (existing.rows[0]) return { publicKey: existing.rows[0].public_key, created: false };
 
-  const wallet = generateSolanaKeypair();
-  const encrypted = encryptSecret(wallet.secretKey);
+  const wallet = createEncryptedSolanaWallet();
   const inserted = await client.query<{ public_key: string }>(
     `INSERT INTO commission_escrow_wallets
        (commission_id, public_key, encrypted_secret_key, encryption_nonce,
@@ -92,11 +112,11 @@ export async function createCommissionEscrowWallet(
      RETURNING public_key`,
     [
       commissionId,
-      wallet.address,
-      encrypted.ciphertext,
-      encrypted.nonce,
-      encrypted.authTag,
-      ENCRYPTION_KEY_VERSION,
+      wallet.publicKey,
+      wallet.encryptedSecretKey,
+      wallet.encryptionNonce,
+      wallet.encryptionAuthTag,
+      wallet.encryptionKeyVersion,
       config.SOLANA_CLUSTER,
     ],
   );

@@ -1,31 +1,21 @@
 import { Router } from "express";
-import { createHash } from "node:crypto";
 import { z } from "zod";
-import { Connection, PublicKey, Transaction } from "@solana/web3.js";
-import {
-  createAssociatedTokenAccountIdempotentInstruction,
-  createTransferCheckedInstruction,
-  getAssociatedTokenAddressSync,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { Connection, PublicKey } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import bs58 from "bs58";
 import { requireAuth } from "../auth.js";
 import { config } from "../config.js";
 import { pool } from "../db/index.js";
-import { createCommissionEscrowWallet } from "../escrow-wallets.js";
+import { settleCommission } from "../escrow-settlement.js";
 import { ApiError } from "../http.js";
+import { decryptPrivateData } from "../private-data.js";
+import { openTribunalCase } from "../tribunal.js";
+import { evidenceItemSchema, submitCommissionWork } from "../commission-work.js";
+import { claimCommissionForWallet, createCommissionForWallet, getCommissionFundingInstructions, publicCommission } from "../commission-service.js";
+import { reviewCommissionSubmission } from "../commission-review.js";
 
 const router = Router();
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
-const amountInput = z.string().regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,6})?$/, "Use a positive decimal amount with at most 6 decimal places.");
-const createInput = z.object({
-  title: z.string().trim().min(3).max(160),
-  description: z.string().trim().min(1).max(20_000),
-  asset: z.enum(["USDC", "USDT"]),
-  amount: amountInput,
-  providerWallet: z.string().min(32).max(44).optional(),
-  deadlineAt: z.coerce.date().optional(),
-});
 const uuidSchema = z.string().uuid();
 const signatureSchema = z.string().min(80).max(100);
 
@@ -38,7 +28,11 @@ type CommissionRow = {
   asset_mint: string;
   amount_atomic: string;
   status: string;
-  deadline_at: Date | null;
+  work_type?: string;
+  work_category?: string;
+  sla_hours?: number | null;
+  proof_schema?: string[] | null;
+  deadline_at: Date;
   accepted_at: Date | null;
   funding_signature: string | null;
   funded_at: Date | null;
@@ -46,49 +40,6 @@ type CommissionRow = {
   updated_at: Date;
   escrow_address?: string;
 };
-
-const publicCommission = (row: CommissionRow) => ({
-  id: row.id,
-  clientWallet: row.client_wallet,
-  providerWallet: row.provider_wallet,
-  title: row.title,
-  description: row.description,
-  assetMint: row.asset_mint,
-  amountAtomic: row.amount_atomic,
-  status: row.status,
-  deadlineAt: row.deadline_at,
-  acceptedAt: row.accepted_at,
-  fundingSignature: row.funding_signature,
-  fundedAt: row.funded_at,
-  escrowAddress: row.escrow_address,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
-
-function assetMint(asset: "USDC" | "USDT") {
-  const mint = asset === "USDC" ? config.USDC_MINT : config.USDT_MINT;
-  if (!mint) throw new ApiError(503, "asset_unavailable", `${asset} is not configured for this cluster.`);
-  try {
-    return new PublicKey(mint).toBase58();
-  } catch {
-    throw new ApiError(503, "asset_misconfigured", `${asset} has an invalid mint configuration.`);
-  }
-}
-
-function canonicalWallet(value: string) {
-  try {
-    return new PublicKey(value).toBase58();
-  } catch {
-    throw new ApiError(400, "invalid_wallet", "Provider wallet must be a valid Solana address.");
-  }
-}
-
-function toAtomic(amount: string) {
-  const [whole, fraction = ""] = amount.split(".");
-  const atomic = BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, "0"));
-  if (atomic <= 0n) throw new ApiError(400, "invalid_amount", "Amount must be greater than zero.");
-  return atomic.toString();
-}
 
 async function commissionById(id: string) {
   const result = await pool.query<CommissionRow>(
@@ -120,7 +71,7 @@ router.get("/", async (request, response) => {
   const result = await pool.query<CommissionRow>(
     `SELECT c.*, w.public_key AS escrow_address
      FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
-     WHERE c.status = 'open' AND c.accepted_at IS NULL
+     WHERE c.status = 'open' AND c.accepted_at IS NULL AND c.work_type IN ('standard', 'interop') AND c.deadline_at > now()
        AND ($1::timestamptz IS NULL OR c.created_at < $1)
      ORDER BY c.created_at DESC LIMIT $2`,
     [query.before ?? null, query.limit],
@@ -129,65 +80,8 @@ router.get("/", async (request, response) => {
 });
 
 router.post("/", requireAuth, async (request, response) => {
-  const input = createInput.parse(request.body);
-  const idempotencyKey = request.header("idempotency-key");
-  if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128) {
-    throw new ApiError(400, "idempotency_key_required", "Provide an Idempotency-Key between 8 and 128 characters.");
-  }
-  if (input.deadlineAt && input.deadlineAt.getTime() <= Date.now()) {
-    throw new ApiError(400, "invalid_deadline", "The deadline must be in the future.");
-  }
-  const providerWallet = input.providerWallet ? canonicalWallet(input.providerWallet) : null;
-  const mint = assetMint(input.asset);
-  const amountAtomic = toAtomic(input.amount);
-  const requestHash = createHash("sha256")
-    .update(JSON.stringify({
-      title: input.title,
-      description: input.description,
-      asset: input.asset,
-      mint,
-      amountAtomic,
-      providerWallet,
-      deadlineAt: input.deadlineAt?.toISOString() ?? null,
-    }))
-    .digest("hex");
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))", [request.auth!.userId, idempotencyKey]);
-    const existing = await client.query<CommissionRow & { request_hash: string | null }>(
-      `SELECT c.*, w.public_key AS escrow_address
-       FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
-       WHERE c.client_user_id = $1 AND c.idempotency_key = $2`,
-      [request.auth!.userId, idempotencyKey],
-    );
-    if (existing.rows[0]) {
-      if (existing.rows[0].request_hash !== requestHash) {
-        throw new ApiError(409, "idempotency_conflict", "This Idempotency-Key was already used for different commission details.");
-      }
-      await client.query("COMMIT");
-      response.status(200).json({ data: publicCommission(existing.rows[0]), idempotentReplay: true });
-      return;
-    }
-    const inserted = await client.query<CommissionRow>(
-      `INSERT INTO commissions
-         (client_user_id, client_wallet, provider_wallet, title, description, asset_mint,
-          amount_atomic, status, deadline_at, idempotency_key, request_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $10)
-       RETURNING *`,
-      [request.auth!.userId, request.auth!.walletAddress, providerWallet, input.title,
-        input.description, mint, amountAtomic, input.deadlineAt ?? null, idempotencyKey, requestHash],
-    );
-    const escrow = await createCommissionEscrowWallet(client, inserted.rows[0].id);
-    const commission = { ...inserted.rows[0], escrow_address: escrow.publicKey };
-    await client.query("COMMIT");
-    response.status(201).json({ data: publicCommission(commission), idempotentReplay: false });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  const result = await createCommissionForWallet(request.auth!, request.header("idempotency-key"), request.body);
+  response.status(result.idempotentReplay ? 200 : 201).json(result);
 });
 
 router.get("/:id", async (request, response) => {
@@ -196,84 +90,16 @@ router.get("/:id", async (request, response) => {
 });
 
 router.get("/:id/funding-instructions", async (request, response) => {
-  const commission = await commissionById(uuidSchema.parse(request.params.id));
-  if (!commission.escrow_address) throw new ApiError(409, "escrow_unavailable", "The commission escrow account is not ready.");
-  if (commission.funding_signature) throw new ApiError(409, "already_funded", "This commission already has a confirmed funding transaction.");
-  const escrow = new PublicKey(commission.escrow_address);
-  const mint = new PublicKey(commission.asset_mint);
-  const client = new PublicKey(commission.client_wallet);
-  const sourceTokenAccount = getAssociatedTokenAddressSync(mint, client);
-  const tokenAccount = getAssociatedTokenAddressSync(mint, escrow);
-  const latestBlockhash = await connection.getLatestBlockhash(config.SOLANA_COMMITMENT);
-  const transaction = new Transaction({
-    feePayer: client,
-    recentBlockhash: latestBlockhash.blockhash,
-  }).add(
-    createAssociatedTokenAccountIdempotentInstruction(client, sourceTokenAccount, client, mint),
-    createAssociatedTokenAccountIdempotentInstruction(client, tokenAccount, escrow, mint),
-    createTransferCheckedInstruction(
-      sourceTokenAccount,
-      mint,
-      tokenAccount,
-      client,
-      BigInt(commission.amount_atomic),
-      6,
-      [],
-      TOKEN_PROGRAM_ID,
-    ),
-  );
-  response.json({
-    data: {
-      commissionId: commission.id,
-      cluster: config.SOLANA_CLUSTER,
-      assetMint: commission.asset_mint,
-      sourceTokenAccount: sourceTokenAccount.toBase58(),
-      tokenAccount: tokenAccount.toBase58(),
-      escrowOwner: escrow.toBase58(),
-      amountAtomic: commission.amount_atomic,
-      decimals: 6,
-      clientWallet: commission.client_wallet,
-      unsignedTransaction: transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"),
-      lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-    },
-  });
+  const id = uuidSchema.parse(request.params.id);
+  response.json({ data: await getCommissionFundingInstructions(id) });
 });
 
 router.post("/:id/accept", requireAuth, async (request, response) => {
   const id = uuidSchema.parse(request.params.id);
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await client.query<CommissionRow & { client_user_id: string; provider_user_id: string | null }>(
-      "SELECT * FROM commissions WHERE id = $1 FOR UPDATE", [id],
-    );
-    const commission = result.rows[0];
-    if (!commission) throw new ApiError(404, "commission_not_found", "Commission not found.");
-    if (commission.client_user_id === request.auth!.userId) throw new ApiError(409, "self_acceptance", "A client cannot accept their own commission.");
-    if (commission.provider_wallet && commission.provider_user_id !== request.auth!.userId) {
-      throw new ApiError(409, "commission_claimed", "This commission has already been accepted by another provider.");
-    }
-    if (!["open", "funded"].includes(commission.status)) throw new ApiError(409, "commission_unavailable", "This commission cannot be accepted in its current state.");
-    if (commission.provider_wallet && commission.provider_wallet !== request.auth!.walletAddress) {
-      throw new ApiError(409, "provider_wallet_mismatch", "This commission is assigned to a different provider wallet.");
-    }
-    const updated = await client.query<CommissionRow>(
-      `UPDATE commissions SET provider_user_id = $2, provider_wallet = $3,
-         accepted_at = COALESCE(accepted_at, now()), updated_at = now()
-       WHERE id = $1 RETURNING *`,
-      [id, request.auth!.userId, request.auth!.walletAddress],
-    );
-    await client.query("COMMIT");
-    response.json({ data: publicCommission(updated.rows[0]) });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  response.json({ data: await claimCommissionForWallet(id, request.auth!) });
 });
 
-router.post("/:id/funding/confirm", requireAuth, async (request, response) => {
+router.post("/:id/funding/confirm", async (request, response) => {
   const id = uuidSchema.parse(request.params.id);
   const { signature } = z.object({ signature: signatureSchema }).parse(request.body);
   let signatureBytes: Uint8Array;
@@ -285,8 +111,10 @@ router.post("/:id/funding/confirm", requireAuth, async (request, response) => {
   if (signatureBytes.length !== 64) throw new ApiError(400, "invalid_signature", "Transaction signature has an invalid length.");
 
   const initial = await commissionById(id);
-  if (initial.client_wallet !== request.auth!.walletAddress) throw new ApiError(403, "commission_forbidden", "Only the commission client can confirm its funding.");
+  const surety = await pool.query<{ state: string }>("SELECT state FROM surety_policies WHERE commission_id = $1", [id]);
+  if (surety.rows[0]?.state === "awaiting_premium") throw new ApiError(409, "surety_premium_required", "Confirm or cancel this commission's Surety premium before funding it.");
   if (!initial.escrow_address) throw new ApiError(409, "escrow_unavailable", "The commission escrow account is not ready.");
+  if (initial.deadline_at <= new Date()) throw new ApiError(409, "commission_expired", "The commission deadline has passed and the commission can no longer be funded.");
   if (initial.funding_signature === signature) {
     response.json({ data: publicCommission(initial), idempotentReplay: true });
     return;
@@ -351,12 +179,14 @@ router.post("/:id/funding/confirm", requireAuth, async (request, response) => {
     const locked = await client.query<CommissionRow>("SELECT * FROM commissions WHERE id = $1 FOR UPDATE", [id]);
     const commission = locked.rows[0];
     if (!commission) throw new ApiError(404, "commission_not_found", "Commission not found.");
+    const surety = await client.query<{ state: string }>("SELECT state FROM surety_policies WHERE commission_id = $1", [id]);
+    if (surety.rows[0]?.state === "awaiting_premium") throw new ApiError(409, "surety_premium_required", "Confirm or cancel this commission's Surety premium before funding it.");
     if (commission.funding_signature === signature) {
       await client.query("COMMIT");
       response.json({ data: publicCommission(await commissionById(id)), idempotentReplay: true });
       return;
     }
-    if (commission.client_wallet !== request.auth!.walletAddress || commission.status !== "open" || commission.funding_signature) {
+    if (commission.status !== "open" || commission.funding_signature) {
       throw new ApiError(409, "commission_not_fundable", "This commission is not awaiting funding.");
     }
     await client.query(
@@ -378,6 +208,118 @@ router.post("/:id/funding/confirm", requireAuth, async (request, response) => {
   } finally {
     client.release();
   }
+});
+
+router.post("/:id/submissions", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const submission = await submitCommissionWork(id, request.auth!.userId, request.body);
+  response.status(201).json({ data: submission });
+});
+
+router.get("/:id/submissions", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const commission = await commissionById(id);
+  const member = await pool.query(
+    "SELECT 1 FROM commissions WHERE id = $1 AND (client_user_id = $2 OR provider_user_id = $2)",
+    [id, request.auth!.userId],
+  );
+  if (!member.rowCount) throw new ApiError(403, "commission_forbidden", "Only commission participants can view submitted evidence.");
+  const submissions = await pool.query<{
+    id: string; revision: number; submitted_at: Date; encryption_key_version: number;
+    encrypted_payload: Buffer; encryption_nonce: Buffer; encryption_auth_tag: Buffer;
+  }>(
+    `SELECT id, revision, encrypted_payload, encryption_nonce, encryption_auth_tag, encryption_key_version, submitted_at FROM commission_submissions
+     WHERE commission_id = $1 ORDER BY revision ASC`, [commission.id],
+  );
+  response.json({ data: submissions.rows.map(({ encrypted_payload, encryption_nonce, encryption_auth_tag, encryption_key_version, ...row }) => ({
+    ...row,
+    ...decryptPrivateData<{ summary: string; evidence: z.infer<typeof evidenceItemSchema>[] }>({
+      ciphertext: encrypted_payload, nonce: encryption_nonce, authTag: encryption_auth_tag,
+      keyVersion: encryption_key_version,
+    }),
+  })) });
+});
+
+router.post("/:id/review", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const result = await reviewCommissionSubmission(id, request.auth!.userId, request.body);
+  response.status(201).json(result);
+});
+
+router.post("/:id/disputes", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const input = z.object({
+    reason: z.string().trim().min(1).max(10000),
+    evidence: z.array(evidenceItemSchema).max(50).default([]),
+  }).parse(request.body);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [id]);
+    const selected = await client.query<CommissionRow & { client_user_id: string; provider_user_id: string | null }>(
+      "SELECT * FROM commissions WHERE id = $1 FOR UPDATE", [id],
+    );
+    const commission = selected.rows[0];
+    if (!commission) throw new ApiError(404, "commission_not_found", "Commission not found.");
+    if (![commission.client_user_id, commission.provider_user_id].includes(request.auth!.userId)) throw new ApiError(403, "commission_forbidden", "Only commission participants can open a dispute.");
+    if (!["funded", "submitted"].includes(commission.status)) throw new ApiError(409, "commission_not_disputable", "This commission cannot be disputed in its current state.");
+    if (!commission.provider_user_id) throw new ApiError(409, "provider_missing", "A provider must accept the commission before it can enter Tribunal.");
+    const submission = await client.query("SELECT 1 FROM commission_submissions WHERE commission_id = $1 LIMIT 1", [id]);
+    if (!submission.rowCount) throw new ApiError(409, "submission_required_for_dispute", "A Tribunal dispute requires a submitted work item; missed deadlines can be refunded directly.");
+    const opened = await client.query<{ id: string; created_at: Date }>(
+      `INSERT INTO tribunal_cases (commission_id, opened_by, reason, evidence)
+       VALUES ($1, $2, $3, $4::jsonb) RETURNING id, created_at`,
+      [id, request.auth!.userId, input.reason, JSON.stringify(input.evidence)],
+    );
+    await client.query("UPDATE commissions SET status = 'disputed', updated_at = now() WHERE id = $1", [id]);
+    await client.query("COMMIT");
+    const wardenAssigned = await openTribunalCase(opened.rows[0].id).catch(() => false);
+    response.status(201).json({ data: { id: opened.rows[0].id, commissionId: id,
+      stage: wardenAssigned ? "warden" : "unassigned", wardenAssigned, createdAt: opened.rows[0].created_at } });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/:id/disputes", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const commission = await pool.query<{ client_user_id: string; provider_user_id: string | null }>(
+    "SELECT client_user_id, provider_user_id FROM commissions WHERE id = $1", [id],
+  );
+  if (!commission.rowCount) throw new ApiError(404, "commission_not_found", "Commission not found.");
+  if (![commission.rows[0].client_user_id, commission.rows[0].provider_user_id].includes(request.auth!.userId)) {
+    throw new ApiError(403, "commission_forbidden", "Only commission participants can view this dispute.");
+  }
+  const result = await pool.query(
+    `SELECT tc.id, tc.reason, tc.evidence, tc.stage, tc.outcome, tc.decision_summary, tc.created_at, tc.updated_at,
+            COALESCE(jsonb_agg(jsonb_build_object('tier', tv.tier, 'verdict', tv.verdict, 'rationale', tv.rationale, 'createdAt', tv.created_at))
+              FILTER (WHERE tv.id IS NOT NULL), '[]'::jsonb) AS votes
+     FROM tribunal_cases tc LEFT JOIN tribunal_votes tv ON tv.case_id = tc.id
+     WHERE tc.commission_id = $1 GROUP BY tc.id`, [id],
+  );
+  response.json({ data: result.rows[0] ?? null });
+});
+
+router.post("/:id/settle", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const commission = await pool.query<{ client_user_id: string }>(
+    "SELECT client_user_id FROM commissions WHERE id = $1", [id],
+  );
+  if (!commission.rowCount) throw new ApiError(404, "commission_not_found", "Commission not found.");
+  if (commission.rows[0].client_user_id !== request.auth!.userId) {
+    throw new ApiError(403, "commission_forbidden", "Only the commission client can authorize settlement.");
+  }
+  const result = await settleCommission(id, "release");
+  response.status(result.state === "confirmed" ? 200 : 202).json({ data: result });
+});
+
+router.post("/:id/refund-expired", async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const result = await settleCommission(id, "refund");
+  response.status(result.state === "confirmed" ? 200 : 202).json({ data: result });
 });
 
 export const commissionsRouter = router;
