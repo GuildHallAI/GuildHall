@@ -16,7 +16,8 @@ concurrency:
 
 jobs:
   test:
-    name: Validate frontend and backend
+    name: Validate backend
+    if: github.repository == 'guildhallAI/guildhall'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,14 +25,6 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-
-      - name: Install frontend dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build frontend
-        run: bun run build
-        env:
-          NEXT_TELEMETRY_DISABLED: 1
 
       - name: Install backend dependencies
         working-directory: backend
@@ -53,7 +46,7 @@ jobs:
   build-push:
     name: Build and publish backend image
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'notadeveloper7/guildhall'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'guildhallAI/guildhall'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -94,7 +87,7 @@ jobs:
   release:
     name: Create backend release
     needs: build-push
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'notadeveloper7/guildhall'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'guildhallAI/guildhall'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -120,7 +113,7 @@ jobs:
   deploy:
     name: Trigger backend deployment
     needs: release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'notadeveloper7/guildhall'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'guildhallAI/guildhall'
     runs-on: ubuntu-latest
     steps:
       - name: Call backend deploy hook when configured
