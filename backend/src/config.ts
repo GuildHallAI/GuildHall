@@ -12,16 +12,8 @@ const env = z
       .default("devnet"),
     SOLANA_RPC_URL: z.string().url(),
     SOLANA_COMMITMENT: z.enum(["processed", "confirmed", "finalized"]).default("confirmed"),
-    GUILDHALL_PROGRAM_ID: z.string().min(32).optional(),
-    CORS_ORIGINS: z.string().default("http://localhost:3000"),
+    DATA_ENCRYPTION_KEY: z.string().min(32),
   })
   .parse(process.env);
 
-export const config = {
-  ...env,
-  corsOrigins: new Set(
-    env.CORS_ORIGINS.split(",")
-      .map((origin) => origin.trim())
-      .filter(Boolean),
-  ),
-};
+export const config = env;

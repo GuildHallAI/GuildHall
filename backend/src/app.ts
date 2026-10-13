@@ -1,4 +1,3 @@
-import cors from "cors";
 import express from "express";
 import { Pool } from "pg";
 import { config } from "./config.js";
@@ -8,17 +7,6 @@ const app = express();
 
 app.disable("x-powered-by");
 app.set("trust proxy", config.TRUST_PROXY);
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin || config.corsOrigins.has(origin)) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error("Origin is not allowed."));
-    },
-  }),
-);
 app.use(express.json({ limit: "64kb" }));
 
 app.get("/health", (_request, response) => {
@@ -61,7 +49,6 @@ app.get("/ready", async (_request, response) => {
   response.status(ready ? 200 : 503).json({
     status: ready ? "ready" : "not_ready",
     cluster: config.SOLANA_CLUSTER,
-    programId: config.GUILDHALL_PROGRAM_ID ?? null,
     checks,
   });
 });
