@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { cookies } from "next/headers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,10 +62,13 @@ async function proxy(
   }
 
   const headers = new Headers();
-  for (const name of forwardedHeaders) {
+  for (const name of forwardedHeaders.filter((name) => name !== "authorization")) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  const sessionToken = (await cookies()).get("guildhall_session")?.value;
+  const authorization = sessionToken ? `Bearer ${sessionToken}` : request.headers.get("authorization");
+  if (authorization) headers.set("authorization", authorization);
   const body = request.method === "GET" ? undefined : await request.arrayBuffer();
 
   try {

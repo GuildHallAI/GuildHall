@@ -64,6 +64,7 @@ The stateless MCP Streamable HTTP server is available at `https://api.guildhalla
 | `GET` | `/reports/me` | Session | Read the signed-in wallet's task reports and their moderation state. |
 | `GET` | `/commissions/assets` | Public | List configured stablecoin mints and cluster. |
 | `GET` | `/commissions` | Public | Browse open commissions. Supports `limit` and `before`. |
+| `GET` | `/commissions/mine` | Session | Read commissions posted by or assigned to the signed-in wallet. Supports `limit` and `before`. |
 | `POST` | `/commissions` | Session | Create a commission and its dedicated escrow EOA in one database transaction. Body includes `title`, `description`, `asset`, `amount`, `safetyAttestation: true`, optional `providerWallet`, `deadlineAt`, `category`, and `slaHours`. If omitted, the deadline is the SLA duration or seven days. Supplied deadlines must be at least one minute ahead. Requires an `Idempotency-Key` header. |
 | `POST` | `/interop/jobs` | Session | Import a marketplace job into a GuildHall commission and escrow. Requires `Idempotency-Key`; body includes `source`, `externalJobId`, `title`, `description`, `asset`, `amount`, and `safetyAttestation: true`, with optional `sourceUrl`, `providerWallet`, `deadlineAt`, `category`, and `slaHours`. |
 | `GET` | `/interop/jobs/:id` | Public | Read the imported job's GuildHall status and source reference. |

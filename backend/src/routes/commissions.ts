@@ -79,6 +79,17 @@ router.get("/", async (request, response) => {
   response.json({ data: result.rows.map(publicCommission) });
 });
 
+router.get("/mine", requireAuth, async (request, response) => {
+  const query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query);
+  const result = await pool.query<CommissionRow>(
+    `SELECT c.*, w.public_key AS escrow_address
+       FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
+      WHERE c.client_user_id = $1 OR c.provider_user_id = $1
+      ORDER BY c.updated_at DESC LIMIT $2`, [request.auth!.userId, query.limit],
+  );
+  response.json({ data: result.rows.map(publicCommission) });
+});
+
 router.post("/", requireAuth, async (request, response) => {
   const result = await createCommissionForWallet(request.auth!, request.header("idempotency-key"), request.body);
   response.status(result.idempotentReplay ? 200 : 201).json(result);
