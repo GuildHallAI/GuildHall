@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { Transaction } from "@solana/web3.js";
 import Link from "./link";
 import { LayoutDashboard, ScrollText, Plus, RefreshCw, LoaderCircle, Clock, ShieldCheck, Search } from "./gothic-icon";
 import { Sidebar, SidebarProvider, SidebarHeader, SidebarContent, SidebarFooter, SidebarInset, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarGroup, SidebarGroupLabel, SidebarTrigger } from "@/components/ui/sidebar";
@@ -34,6 +36,11 @@ const localDateTime = (value: number) => {
   return local.toISOString().slice(0, 16);
 };
 type CommissionSubmission = { id: string; revision: number; submitted_at: string; summary: string; evidence: { kind: string; label: string; value: string }[] };
+type FundingInstructions = {
+  commissionId: string; cluster: string; assetMint: string; amountAtomic: string; clientWallet: string;
+  unsignedTransaction: string; lastValidBlockHeight: number;
+};
+type PendingFunding = { signature: string; blockhash: string; lastValidBlockHeight: number };
 
 function CommissionCard({
   commission, own = false, onOpen, onAccept, session, asset,
@@ -66,6 +73,8 @@ export function LiveDashboard() {
 }
 
 function LiveWorkspace() {
+  const { connection } = useConnection();
+  const { connected: walletConnected, publicKey, sendTransaction } = useWallet();
   const [tab, setTab] = useState("overview");
   const [session, setSession] = useState<WalletSession | null>(null);
   const [openJobs, setOpenJobs] = useState<ApiCommission[]>([]);
@@ -85,6 +94,8 @@ function LiveWorkspace() {
   const [form, setForm] = useState({ title: "", description: "", category: "development", amount: "25", asset: "USDC", deadline: localDateTime(Date.now() + 7 * 86_400_000), safe: false });
   const [submissions, setSubmissions] = useState<CommissionSubmission[]>([]);
   const [submissionsLoading, setSubmissionsLoading] = useState(false);
+  const [fundingBusy, setFundingBusy] = useState(false);
+  const [pendingFunding, setPendingFunding] = useState<{ commissionId: string } & PendingFunding | null>(null);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -131,6 +142,62 @@ function LiveWorkspace() {
     }
   };
   const latestSubmission = submissions.at(-1);
+
+  const recordFunding = async (commission: ApiCommission, pending: PendingFunding) => {
+    const confirmation = await connection.confirmTransaction({
+      signature: pending.signature,
+      blockhash: pending.blockhash,
+      lastValidBlockHeight: pending.lastValidBlockHeight,
+    }, "confirmed");
+    if (confirmation.value.err) throw new Error("The Solana funding transaction failed. The commission is still unfunded.");
+    const result = await guildhallApi<{ data: ApiCommission }>(`/commissions/${commission.id}/funding/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ signature: pending.signature }),
+    });
+    setPendingFunding(null);
+    setDetail(result.data);
+    toast.success("Escrow funded and confirmed on Solana.");
+    await refresh();
+  };
+
+  const fundCommission = async (commission: ApiCommission) => {
+    if (!session || !publicKey || !walletConnected || publicKey.toBase58() !== commission.clientWallet || session.walletAddress !== commission.clientWallet) {
+      toast.error("Connect the same wallet that posted this commission to fund its escrow.");
+      return;
+    }
+    setFundingBusy(true);
+    try {
+      const instructions = await guildhallApi<FundingInstructions>(`/commissions/${commission.id}/funding-instructions`);
+      if (instructions.commissionId !== commission.id || instructions.clientWallet !== commission.clientWallet || instructions.assetMint !== commission.assetMint || instructions.amountAtomic !== commission.amountAtomic) {
+        throw new Error("The funding instructions do not match this commission. No transaction was sent.");
+      }
+      if (instructions.cluster !== assets.cluster) {
+        throw new Error(`This commission is on ${instructions.cluster}, but the dashboard is configured for ${assets.cluster}. No transaction was sent.`);
+      }
+      const binary = atob(instructions.unsignedTransaction);
+      const transaction = Transaction.from(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
+      if (!transaction.recentBlockhash) throw new Error("The funding transaction has no recent blockhash. Refresh and try again.");
+      const signature = await sendTransaction(transaction, connection);
+      const pending = { signature, blockhash: transaction.recentBlockhash, lastValidBlockHeight: instructions.lastValidBlockHeight };
+      setPendingFunding({ commissionId: commission.id, ...pending });
+      toast.info("Transaction sent. Waiting for Solana confirmation…");
+      await recordFunding(commission, pending);
+    } catch (cause) {
+      console.error("[GuildHall] Commission funding failed:", cause);
+      toast.error((cause as Error).message || "Could not fund this commission.");
+    } finally { setFundingBusy(false); }
+  };
+
+  const confirmPendingFunding = async () => {
+    if (!detail || !pendingFunding || pendingFunding.commissionId !== detail.id) return;
+    setFundingBusy(true);
+    try {
+      await recordFunding(detail, pendingFunding);
+    } catch (cause) {
+      console.error("[GuildHall] Funding confirmation failed:", cause);
+      toast.error((cause as Error).message || "The funding transaction is not confirmed yet.");
+    } finally { setFundingBusy(false); }
+  };
 
   const createCommission = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -234,7 +301,8 @@ function LiveWorkspace() {
     </form></DialogContent></Dialog>
     <Sheet open={!!detail} onOpenChange={(open) => { if (!open) { setDetail(null); setAction(null); setSubmissions([]); } }}><SheetContent className="commission-sheet">{detail && <><span className="eyebrow">{detail.category} / {statusLabel[detail.status] ?? detail.status}</span><SheetTitle>{detail.title}</SheetTitle><SheetDescription>Commission · {amount(detail.amountAtomic)} {assetName(detail)} · due {date(detail.deadlineAt)}</SheetDescription><div className="detail-section"><h3>Work and acceptance criteria</h3><p>{detail.description}</p></div><div className="detail-section"><h3>Parties</h3><div className="mandate-row"><span>Client</span><b>{shortWallet(detail.clientWallet)}</b></div><div className="mandate-row"><span>Provider</span><b>{detail.providerWallet ? shortWallet(detail.providerWallet) : "Unassigned"}</b></div><div className="mandate-row"><span>Escrow</span><b>{detail.escrowAddress ? shortWallet(detail.escrowAddress) : "Preparing"}</b></div><div className="mandate-row"><span>Funding</span><b>{detail.fundingSignature ? "Confirmed on Solana" : "Awaiting client funding"}</b></div></div>
       {session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <div className="detail-section live-submission">{submissionsLoading ? <p>Loading submitted work…</p> : latestSubmission ? <><h3>Submission · revision {latestSubmission.revision}</h3><p>{latestSubmission.summary}</p>{latestSubmission.evidence.map((item, index) => <div className="live-evidence" key={`${latestSubmission.id}-${index}`}><strong>{item.label || item.kind}</strong><span>{item.value}</span></div>)}</> : <p>Submission details are unavailable. Refresh and try again.</p>}</div>}
-      <div className="detail-actions">{session?.walletAddress === detail.providerWallet && detail.status === "funded" && <Button className="button button-gold" onClick={() => setAction("submit")}>Submit work</Button>}{session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <Button className="button button-gold" disabled={submissionsLoading || !latestSubmission} onClick={() => setAction("review")}>Review submission</Button>}{detail.status === "open" && session?.walletAddress !== detail.clientWallet && <Button className="button button-gold" onClick={() => void acceptWork(detail)}>Accept work</Button>}{!session && <p className="micro-copy">Connect your wallet to claim work or manage this commission.</p>}{detail.status === "open" && session?.walletAddress === detail.clientWallet && <p className="micro-copy">Your commission is posted. Funding instructions and wallet confirmation are the next step.</p>}</div>
+      {detail.status === "open" && session?.walletAddress === detail.clientWallet && <div className="detail-section live-funding-panel"><h3>Fund commission escrow</h3><p>This will ask your connected wallet to transfer exactly <strong>{amount(detail.amountAtomic)} {assetName(detail)}</strong> from your wallet to this commission’s escrow on <strong>{assets.cluster}</strong>. Review the amount and token in your wallet before approving.</p>{pendingFunding?.commissionId === detail.id ? <Button className="button button-gold" disabled={fundingBusy} onClick={() => void confirmPendingFunding()}>{fundingBusy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}Check transaction confirmation</Button> : <Button className="button button-gold" disabled={fundingBusy || !walletConnected || publicKey?.toBase58() !== detail.clientWallet} onClick={() => void fundCommission(detail)}>{fundingBusy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}Fund escrow with {assetName(detail)}</Button>}{(!walletConnected || publicKey?.toBase58() !== detail.clientWallet) && <p className="micro-copy">Connect the same wallet that posted this commission to continue.</p>}</div>}
+      <div className="detail-actions">{session?.walletAddress === detail.providerWallet && detail.status === "funded" && <Button className="button button-gold" onClick={() => setAction("submit")}>Submit work</Button>}{session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <Button className="button button-gold" disabled={submissionsLoading || !latestSubmission} onClick={() => setAction("review")}>Review submission</Button>}{detail.status === "open" && session?.walletAddress !== detail.clientWallet && <Button className="button button-gold" onClick={() => void acceptWork(detail)}>Accept work</Button>}{!session && <p className="micro-copy">Connect your wallet to claim work or manage this commission.</p>}</div>
       </>}</SheetContent></Sheet>
     <Dialog open={!!action} onOpenChange={(open) => { if (!open) setAction(null); }}><DialogContent className="commission-dialog"><DialogTitle>{action === "submit" ? "Submit work" : "Review submission"}</DialogTitle><DialogDescription>{action === "submit" ? "Your submission is encrypted at rest before the client can review it." : "Accepting starts an independent evaluator sign-off; disputing opens the Tribunal."}</DialogDescription>{action === "submit" ? <form className="guild-form" onSubmit={(event) => void submitWork(event)}><div><Label htmlFor="work-summary">Summary</Label><Input id="work-summary" required minLength={1} maxLength={5000} value={summary} onChange={(event) => setSummary(event.target.value)} /></div><div><Label htmlFor="work-evidence">Evidence or deliverable URL</Label><Textarea id="work-evidence" required minLength={1} maxLength={4000} rows={4} value={evidence} onChange={(event) => setEvidence(event.target.value)} /></div><div className="form-actions"><Button type="button" variant="ghost" onClick={() => setAction(null)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy}>Submit encrypted work</Button></div></form> : <form className="guild-form" onSubmit={(event) => void reviewWork(event)}><div><Label>Decision</Label><Select value={decision} onValueChange={setDecision}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="accept">Accept · evaluator sign-off</SelectItem><SelectItem value="request_changes">Request changes</SelectItem><SelectItem value="dispute">Open Tribunal dispute</SelectItem></SelectContent></Select></div><div><Label htmlFor="review-rationale">Rationale</Label><Textarea id="review-rationale" required minLength={1} maxLength={10000} rows={4} value={rationale} onChange={(event) => setRationale(event.target.value)} /></div><div className="form-actions"><Button type="button" variant="ghost" onClick={() => setAction(null)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy}>Submit review</Button></div></form>}</DialogContent></Dialog>
   </>;
