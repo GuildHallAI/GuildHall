@@ -1,44 +1,36 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import bs58 from "bs58";
 import { Button } from "@/components/ui/button";
-import { getWalletSession, type WalletSession } from "@/lib/guildhall-api";
-import { encodeBase58 } from "@/lib/solana-base58";
-
-type SolanaProvider = {
-  publicKey?: { toBase58?: () => string; toString: () => string } | null;
-  connect: () => Promise<{ publicKey?: { toBase58?: () => string; toString: () => string } }>;
-  signMessage: (message: Uint8Array, display?: "utf8") => Promise<Uint8Array | { signature: Uint8Array }>;
-};
-
-declare global {
-  interface Window {
-    solana?: SolanaProvider;
-    phantom?: { solana?: SolanaProvider };
-    solflare?: SolanaProvider;
-  }
-}
-
-function walletAddressOf(key: SolanaProvider["publicKey"]) {
-  return key?.toBase58?.() ?? key?.toString() ?? "";
-}
+import { getWalletSession, guildhallApi, type WalletSession } from "@/lib/guildhall-api";
 
 function announceSession(session: WalletSession | null) {
   window.dispatchEvent(new CustomEvent("guildhall-session-change", { detail: session }));
 }
 
+function errorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error) return error;
+  return "Unexpected wallet error. Check that your wallet is unlocked and try again.";
+}
+
 export function WalletSessionControl({ compact = false }: { compact?: boolean }) {
+  const { connected, publicKey, signMessage, disconnect, wallet } = useWallet();
   const [session, setSession] = useState<WalletSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const attemptedWallet = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const next = await getWalletSession();
       setSession(next);
     } catch (error) {
-      setMessage((error as Error).message);
+      setMessage(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -51,71 +43,106 @@ export function WalletSessionControl({ compact = false }: { compact?: boolean })
       setSession(next);
       setMessage("");
     };
+    const adapterError = (event: Event) => {
+      setMessage((event as CustomEvent<string>).detail);
+    };
     window.addEventListener("guildhall-session-change", update);
-    return () => window.removeEventListener("guildhall-session-change", update);
+    window.addEventListener("guildhall-wallet-adapter-error", adapterError);
+    return () => {
+      window.removeEventListener("guildhall-session-change", update);
+      window.removeEventListener("guildhall-wallet-adapter-error", adapterError);
+    };
   }, [refresh]);
 
-  const connect = async () => {
+  const authenticate = useCallback(async (walletAddress: string) => {
+    if (!signMessage) {
+      setMessage(`${wallet?.adapter.name ?? "This wallet"} does not support message signing.`);
+      return;
+    }
     setBusy(true);
     setMessage("");
     try {
-      const wallet = window.phantom?.solana ?? window.solflare ?? window.solana;
-      if (!wallet?.connect || !wallet.signMessage) {
-        throw new Error("Install Phantom or Solflare to sign in with a Solana wallet.");
-      }
-      const connected = await wallet.connect();
-      const walletAddress = walletAddressOf(connected.publicKey ?? wallet.publicKey);
-      if (!walletAddress) throw new Error("The wallet did not provide a public address.");
-      const challenge = await fetch("/api/backend/v1/auth/nonce", {
+      const challenge = await guildhallApi<{ walletAddress: string; nonce: string; message: string }>("/auth/nonce", {
         method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify({ walletAddress }),
-        cache: "no-store",
       });
-      const noncePayload = await challenge.json() as { data?: { walletAddress: string; nonce: string; message: string }; error?: { message?: string } };
-      if (!challenge.ok || !noncePayload.data) throw new Error(noncePayload.error?.message ?? "Could not request a wallet sign-in challenge.");
-      if (noncePayload.data.walletAddress !== walletAddress) throw new Error("The sign-in challenge belongs to a different wallet.");
-      const signed = await wallet.signMessage(new TextEncoder().encode(noncePayload.data.message), "utf8");
-      const signature = signed instanceof Uint8Array ? signed : signed.signature;
-      const verified = await fetch("/api/session", {
+      if (challenge.walletAddress !== walletAddress) {
+        throw new Error("The sign-in challenge belongs to a different wallet.");
+      }
+      const signature = await signMessage(new TextEncoder().encode(challenge.message));
+      const response = await fetch("/api/session", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ walletAddress, nonce: noncePayload.data.nonce, signature: encodeBase58(signature) }),
+        body: JSON.stringify({ walletAddress, nonce: challenge.nonce, signature: bs58.encode(signature) }),
         cache: "no-store",
         credentials: "same-origin",
       });
-      const sessionPayload = await verified.json() as { data?: WalletSession; error?: { message?: string } };
-      if (!verified.ok || !sessionPayload.data) throw new Error(sessionPayload.error?.message ?? "The wallet signature could not be verified.");
-      setSession(sessionPayload.data);
-      announceSession(sessionPayload.data);
+      const payload = await response.json() as { data?: WalletSession; error?: { message?: string } };
+      if (!response.ok || !payload.data) {
+        throw new Error(payload.error?.message ?? `Wallet sign-in failed (${response.status}).`);
+      }
+      setSession(payload.data);
+      announceSession(payload.data);
     } catch (error) {
-      setMessage((error as Error).message || "Wallet sign-in was cancelled.");
+      console.error("[GuildHall] Wallet sign-in failed:", error);
+      setMessage(errorMessage(error));
     } finally {
       setBusy(false);
-      setLoading(false);
     }
-  };
+  }, [signMessage, wallet]);
+
+  useEffect(() => {
+    if (!connected || !publicKey || loading) {
+      if (!connected) attemptedWallet.current = null;
+      return;
+    }
+    const address = publicKey.toBase58();
+    if (session?.walletAddress === address || attemptedWallet.current === address) return;
+    attemptedWallet.current = address;
+    void authenticate(address);
+  }, [authenticate, connected, loading, publicKey, session?.walletAddress]);
 
   const signOut = async () => {
     setBusy(true);
+    setMessage("");
     try {
-      await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
+      const response = await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
+      if (!response.ok) throw new Error(`Could not end this session (${response.status}).`);
       setSession(null);
       announceSession(null);
-    } catch {
-      setMessage("Could not end this session. Try again.");
+    } catch (error) {
+      setMessage(errorMessage(error));
     } finally {
+      try { await disconnect(); }
+      catch (error) { console.error("[GuildHall] Wallet disconnect failed:", error); }
       setBusy(false);
     }
   };
 
-  const label = loading ? "Checking wallet…" : busy ? "Connecting…"
-    : session ? `${session.walletAddress.slice(0, 4)}…${session.walletAddress.slice(-4)} · Sign out`
-      : "Connect wallet";
-  return <div className={`wallet-session-control${compact ? " compact" : ""}`}>
-    <Button type="button" variant={session ? "outline" : "default"} className="button wallet-session-button" disabled={loading || busy} onClick={() => void (session ? signOut() : connect())}>
-      {label}
-    </Button>
-    {message && <span className="wallet-session-message" role="status">{message}</span>}
-  </div>;
+  const retrySignIn = () => {
+    if (!publicKey) return;
+    attemptedWallet.current = publicKey.toBase58();
+    void authenticate(publicKey.toBase58());
+  };
+
+  return (
+    <div className={`wallet-session-control${compact ? " compact" : ""}`}>
+      <WalletMultiButton className="button wallet-session-button" />
+      {busy && <span className="wallet-session-message" role="status">Signing in to GuildHall…</span>}
+      {session && (
+        <div className="wallet-session-active">
+          <span>GuildHall session · {session.walletAddress.slice(0, 4)}…{session.walletAddress.slice(-4)}</span>
+          <Button type="button" variant="ghost" className="wallet-session-signout" disabled={busy || loading} onClick={() => void signOut()}>
+            Sign out
+          </Button>
+        </div>
+      )}
+      {connected && !session && !busy && !loading && (
+        <Button type="button" variant="ghost" className="wallet-session-signout" onClick={retrySignIn}>
+          Sign in to GuildHall
+        </Button>
+      )}
+      {message && <span className="wallet-session-message" role="alert">{message}</span>}
+    </div>
+  );
 }
