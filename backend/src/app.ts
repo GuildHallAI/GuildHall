@@ -111,7 +111,7 @@ app.get("/ready", async (_request, response) => {
     }),
     Promise.resolve().then(() => loadSolanaFeePayer()),
     Promise.resolve().then(() => {
-      if (config.CRON_SECRET.length < 32) throw new Error("CRON_SECRET must contain at least 32 characters.");
+      if (config.CRON_SECRET.length < 24) throw new Error("CRON_SECRET must contain at least 24 characters.");
     }),
     Promise.resolve().then(async () => {
       const configuredMints = [config.USDC_MINT, config.USDT_MINT].filter((value): value is string => Boolean(value));

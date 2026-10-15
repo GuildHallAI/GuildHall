@@ -28,7 +28,7 @@ export const internalRouter = Router();
 
 function requireCronSecret(supplied: string) {
   const expected = config.CRON_SECRET;
-  if (expected.length < 32) throw new ApiError(503, "internal_api_unavailable", "The internal API secret must be configured with at least 32 characters.");
+  if (expected.length < 24) throw new ApiError(503, "internal_api_unavailable", "The internal API secret must be configured with at least 24 characters.");
   const suppliedBytes = Buffer.from(supplied);
   const expectedBytes = Buffer.from(expected);
   if (suppliedBytes.length !== expectedBytes.length || !timingSafeEqual(suppliedBytes, expectedBytes)) {
