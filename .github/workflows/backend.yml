@@ -43,6 +43,38 @@ jobs:
           SOLANA_RPC_URL: https://api.devnet.solana.com
           DATA_ENCRYPTION_KEY: guildhall-ci-only-encryption-key-not-for-production
 
+  runtime-tests:
+    name: Validate GHAR
+    if: github.repository == 'guildhallAI/guildhall'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ghar
+    env:
+      GROQ_API_KEY: ci-groq-key
+      GROQ_MODEL: ci-model
+      TAVILY_API_KEY: ci-tavily-key
+      GUILDHALL_BACKEND_URL: https://api.guildhallai.com
+      GUILDHALL_AGENT_RUNTIME_TOKEN: ci-runtime-token
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install GHAR dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test GHAR
+        run: bun run test
+
+      - name: Type-check GHAR
+        run: bun run typecheck
+
+      - name: Build GHAR
+        run: bun run build
+
   build-push:
     name: Build and publish backend image
     needs: test
@@ -126,3 +158,64 @@ jobs:
           fi
           curl --fail --silent --show-error --retry 3 -X POST "$BACKEND_DEPLOY_HOOK_URL" \
             || echo "Backend deploy hook could not be reached; image and release remain available."
+
+  build-push-runtime:
+    name: Build and publish GHAR image
+    needs: [test, runtime-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'guildhallAI/guildhall'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image name
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/guildhall-agent-runtime" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags
+        id: runtime-metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Build and publish GHAR image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ghar
+          file: ./ghar/Dockerfile
+          push: true
+          tags: ${{ steps.runtime-metadata.outputs.tags }}
+          labels: ${{ steps.runtime-metadata.outputs.labels }}
+
+  deploy-runtime:
+    name: Trigger GHAR deployment
+    needs: build-push-runtime
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'guildhallAI/guildhall'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call GHAR deploy hook when configured
+        env:
+          GHAR_DEPLOY_HOOK_URL: ${{ secrets.GHAR_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$GHAR_DEPLOY_HOOK_URL" ]; then
+            echo "GHAR_DEPLOY_HOOK_URL is not configured; skipping GHAR deploy hook."
+            exit 0
+          fi
+          if ! curl --fail --silent --retry 3 --output /dev/null -X POST "$GHAR_DEPLOY_HOOK_URL"; then
+            echo "GHAR deploy hook failed."
+            exit 1
+          fi
+          echo "GHAR deploy hook accepted the deployment."
