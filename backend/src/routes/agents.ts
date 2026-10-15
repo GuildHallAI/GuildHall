@@ -6,6 +6,7 @@ import { pool } from "../db/index.js";
 import { ApiError } from "../http.js";
 import { publicCommission } from "../commission-service.js";
 import { submitCommissionWork } from "../commission-work.js";
+import { config } from "../config.js";
 
 export const agentsRouter = Router();
 
@@ -18,12 +19,96 @@ const agentInput = z.object({
 const tokenLifetimeDays = z.coerce.number().int().min(1).max(365).default(90);
 
 agentsRouter.get("/", async (_request, response) => {
+  const query = z.object({ search: z.string().trim().max(120).optional() }).parse(_request.query);
   const result = await pool.query(
     `SELECT id, owner_wallet AS "ownerWallet", name, description, categories, capabilities,
-            created_at AS "createdAt"
-       FROM work_agents WHERE active ORDER BY created_at DESC LIMIT 100`,
+            created_at AS "createdAt",
+            regexp_replace(trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')), '-+', '-', 'g') AS slug
+       FROM work_agents
+      WHERE active AND ($1::text IS NULL OR id::text ILIKE '%' || $1 || '%'
+        OR name ILIKE '%' || $1 || '%' OR owner_wallet ILIKE '%' || $1 || '%'
+        OR regexp_replace(trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')), '-+', '-', 'g') = lower($1))
+      ORDER BY created_at DESC LIMIT 100`, [query.search ?? null],
   );
   response.json({ data: result.rows });
+});
+
+agentsRouter.get("/:identifier/record", async (request, response) => {
+  const identifier = z.string().trim().min(1).max(120).parse(request.params.identifier);
+  const agent = await pool.query<{
+    id: string; owner_wallet: string; name: string; description: string; categories: string[];
+    capabilities: string[]; created_at: Date; slug: string;
+  }>(
+    `SELECT id, owner_wallet, name, description, categories, capabilities, created_at,
+            regexp_replace(trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')), '-+', '-', 'g') AS slug
+       FROM work_agents WHERE active AND (
+         ($1::boolean AND id = $2::uuid) OR
+         regexp_replace(trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')), '-+', '-', 'g') = lower($3)
+       )
+      ORDER BY CASE WHEN $1::boolean AND id = $2::uuid THEN 0 ELSE 1 END, created_at DESC LIMIT 1`,
+    [/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier),
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier) ? identifier : "00000000-0000-4000-8000-000000000000",
+      identifier],
+  );
+  if (!agent.rows[0]) throw new ApiError(404, "agent_not_found", "No active GuildHall agent matches that name or ID.");
+  const id = agent.rows[0].id;
+  const [stats, paidByAsset, records, ratings] = await Promise.all([
+    pool.query<{
+      settled_commissions: number; accepted_commissions: number;
+      distinct_clients: number; lost_appeals: number; rating_count: number; weighted_rating: string | null;
+    }>(
+      `SELECT count(*)::int AS settled_commissions,
+              count(*) FILTER (WHERE outcome IN ('accepted', 'tribunal_provider'))::int AS accepted_commissions,
+              count(DISTINCT client_user_id)::int AS distinct_clients,
+              (SELECT count(DISTINCT c.id)::int FROM commissions c JOIN tribunal_cases tc ON tc.commission_id=c.id
+                WHERE c.provider_agent_id=$1 AND tc.stage='decided' AND tc.appealed_by=c.provider_user_id
+                  AND tc.outcome IN ('client', 'split')) AS lost_appeals,
+              (SELECT count(*)::int FROM work_record_feedback f JOIN work_records fw ON fw.id=f.work_record_id WHERE fw.provider_agent_id=$1) AS rating_count,
+              (SELECT (sum(f.rating::numeric * f.weight_atomic) / NULLIF(sum(f.weight_atomic), 0))::text
+                 FROM work_record_feedback f JOIN work_records fw ON fw.id=f.work_record_id WHERE fw.provider_agent_id=$1) AS weighted_rating
+         FROM work_records WHERE provider_agent_id=$1`, [id],
+    ),
+    pool.query(
+      `SELECT asset_mint AS "assetMint", sum(paid_amount_atomic)::text AS "paidAmountAtomic"
+         FROM work_records WHERE provider_agent_id=$1 AND paid_amount_atomic > 0
+        GROUP BY asset_mint ORDER BY asset_mint`, [id],
+    ),
+    pool.query(
+      `SELECT wr.commission_id AS "commissionId", c.title, c.work_category AS category,
+              wr.asset_mint AS "assetMint", wr.amount_atomic::text AS "amountAtomic",
+              wr.paid_amount_atomic::text AS "paidAmountAtomic", wr.outcome, wr.finalized_at AS "finalizedAt",
+              chain.state AS "chainState", chain.transaction_signature AS "chainSignature"
+         FROM work_records wr JOIN commissions c ON c.id=wr.commission_id
+         LEFT JOIN work_record_chain_operations chain ON chain.work_record_id=wr.id
+        WHERE wr.provider_agent_id=$1 ORDER BY wr.finalized_at DESC, wr.id DESC`, [id],
+    ),
+    pool.query(
+      `SELECT f.id, f.rating, f.comment, f.weight_atomic::text AS "weightAtomic", f.created_at AS "createdAt",
+              reviewer.wallet_address AS "reviewerWallet", wr.commission_id AS "commissionId", c.title AS "commissionTitle",
+              chain.state AS "registryState", chain.transaction_signature AS "registrySignature"
+         FROM work_record_feedback f JOIN work_records wr ON wr.id=f.work_record_id
+         JOIN commissions c ON c.id=wr.commission_id
+         JOIN wallet_users reviewer ON reviewer.id=f.reviewer_user_id
+         LEFT JOIN registry_feedback_operations chain ON chain.feedback_id=f.id
+        WHERE wr.provider_agent_id=$1 ORDER BY f.created_at DESC`, [id],
+    ),
+  ]);
+  const totals = stats.rows[0];
+  response.json({ data: {
+    agent: { id, ownerWallet: agent.rows[0].owner_wallet, name: agent.rows[0].name,
+      description: agent.rows[0].description, categories: agent.rows[0].categories,
+      capabilities: agent.rows[0].capabilities, createdAt: agent.rows[0].created_at, slug: agent.rows[0].slug },
+    record: { settledCommissions: totals.settled_commissions, acceptedCommissions: totals.accepted_commissions,
+      acceptanceRate: totals.settled_commissions === 0 ? 0 : totals.accepted_commissions / totals.settled_commissions,
+      distinctClients: totals.distinct_clients,
+      lostAppeals: totals.lost_appeals, ratingCount: totals.rating_count,
+      weightedRating: totals.weighted_rating === null ? null : Number(totals.weighted_rating) },
+    workRecords: records.rows,
+    ratings: ratings.rows,
+    cluster: config.SOLANA_CLUSTER,
+    assets: { USDC: config.USDC_MINT ?? null, USDT: config.USDT_MINT ?? null },
+    paidByAsset: paidByAsset.rows,
+  } });
 });
 
 agentsRouter.get("/mine", requireAuth, async (request, response) => {
