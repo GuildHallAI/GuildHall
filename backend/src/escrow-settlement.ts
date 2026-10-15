@@ -392,6 +392,56 @@ async function markConfirmed(
   }
 }
 
+/** Finalize DB records for a payout whose exact signature is already finalized on Solana.
+ * This recovery path never broadcasts or replaces a settlement transaction.
+ */
+export async function syncFinalizedCommissionSettlement(commissionId: string, signature: string) {
+  const status = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
+  if (!status || status.err || status.confirmationStatus !== "finalized") {
+    throw new ApiError(409, "settlement_not_finalized", "The exact settlement signature is not finalized on Solana.");
+  }
+
+  const client = await pool.connect();
+  let lockHeld = false;
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtext($1))", [commissionId]);
+    lockHeld = true;
+    const result = await client.query<{
+      status: string; provider_user_id: string | null; operation_id: string; operation_state: string;
+      attempt_id: string; transaction_signature: string; signed_transaction: Buffer;
+      recent_blockhash: string; last_valid_block_height: string; attempt_state: Attempt["state"];
+    }>(
+      `SELECT c.status, c.provider_user_id, o.id AS operation_id, o.state AS operation_state,
+              a.id AS attempt_id, a.transaction_signature, a.signed_transaction, a.recent_blockhash,
+              a.last_valid_block_height::text, a.state AS attempt_state
+         FROM commissions c
+         JOIN commission_escrow_operations o ON o.commission_id = c.id AND o.operation = 'release'
+         JOIN commission_escrow_operation_attempts a ON a.operation_id = o.id
+        WHERE c.id = $1 AND a.transaction_signature = $2
+        ORDER BY a.created_at DESC LIMIT 1`, [commissionId, signature],
+    );
+    const row = result.rows[0];
+    if (!row || row.status !== "approved" || !row.provider_user_id
+      || !["submitted", "outcome_unknown"].includes(row.operation_state)
+      || !["submitted", "outcome_unknown"].includes(row.attempt_state)) {
+      throw new ApiError(409, "settlement_state_changed", "The commission records no longer match this finalized settlement.");
+    }
+    const attempt: Attempt = {
+      id: row.attempt_id,
+      transaction_signature: row.transaction_signature,
+      signed_transaction: row.signed_transaction,
+      recent_blockhash: row.recent_blockhash,
+      last_valid_block_height: row.last_valid_block_height,
+      state: row.attempt_state,
+    };
+    await markConfirmed(attempt, row.operation_id, commissionId, row.provider_user_id, "release");
+    return { commissionId, state: "confirmed" as const, signature };
+  } finally {
+    if (lockHeld) await client.query("SELECT pg_advisory_unlock(hashtext($1))", [commissionId]).catch(() => undefined);
+    client.release();
+  }
+}
+
 async function settleCrewPayoutSteps(
   db: PoolClient,
   commission: { id: string; amount_atomic: string; asset_mint: string; client_wallet: string; escrow_address: string; provider_user_id: string | null },

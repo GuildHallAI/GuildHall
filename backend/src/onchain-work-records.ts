@@ -36,23 +36,25 @@ export async function enqueueWorkRecordChainOperation(db: PoolClient, workRecord
   const row = result.rows[0];
   if (!row) throw new Error("Cannot enqueue a missing work record.");
   const workerPayoutsHash = createHash("sha256").update(JSON.stringify(row.worker_payouts)).digest("hex");
+  // Keep the immutable public digest within Solana Memo's 566-byte limit.
+  // Short field names preserve the same data while avoiding oversized JSON.
   const publicRecord = {
-    version: 1,
-    workRecordId: row.id,
-    commissionId: row.commission_id,
-    clientWallet: row.client_wallet,
-    providerWallet: row.provider_wallet,
-    assetMint: row.asset_mint,
-    amountAtomic: row.amount_atomic,
-    paidAmountAtomic: row.paid_amount_atomic,
-    workerCount: row.worker_payouts.length,
-    workerPayoutsHash,
-    outcome: row.outcome,
-    finalizedAt: row.finalized_at.toISOString(),
+    v: 1,
+    wr: row.id,
+    c: row.commission_id,
+    cw: row.client_wallet,
+    pw: row.provider_wallet,
+    m: row.asset_mint,
+    a: row.amount_atomic,
+    pa: row.paid_amount_atomic,
+    wc: row.worker_payouts.length,
+    wph: workerPayoutsHash,
+    o: row.outcome,
+    at: row.finalized_at.toISOString(),
   };
   const canonical = JSON.stringify(publicRecord);
   const recordHash = createHash("sha256").update(canonical).digest("hex");
-  const memoData = JSON.stringify({ ...publicRecord, recordHash });
+  const memoData = JSON.stringify({ ...publicRecord, h: recordHash });
   if (Buffer.byteLength(memoData, "utf8") > 566) {
     throw new Error("The public work record exceeds the Solana Memo instruction data limit.");
   }
