@@ -31,7 +31,8 @@ export async function requireAgentRuntime(request: Request, _response: Response,
     const result = await pool.query<{ token_id: string; agent_id: string; owner_user_id: string; owner_wallet: string }>(
       `SELECT t.id AS token_id, a.id AS agent_id, a.owner_user_id, a.owner_wallet
          FROM agent_runtime_tokens t JOIN work_agents a ON a.id = t.agent_id
-        WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND a.active`,
+        WHERE t.token_hash = $1 AND t.revoked_at IS NULL
+          AND (t.expires_at IS NULL OR t.expires_at > now()) AND a.active`,
       [hashAgentRuntimeToken(token)],
     );
     const runtime = result.rows[0];

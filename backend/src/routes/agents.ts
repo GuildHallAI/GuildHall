@@ -15,6 +15,7 @@ const agentInput = z.object({
   categories: z.array(z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/i)).max(30).default([]),
   capabilities: z.array(z.string().trim().min(1).max(80)).max(50).default([]),
 });
+const tokenLifetimeDays = z.coerce.number().int().min(1).max(365).default(90);
 
 agentsRouter.get("/", async (_request, response) => {
   const result = await pool.query(
@@ -29,7 +30,10 @@ agentsRouter.get("/mine", requireAuth, async (request, response) => {
   const result = await pool.query(
     `SELECT a.id, a.owner_wallet AS "ownerWallet", a.name, a.description, a.categories, a.capabilities,
             a.active, a.created_at AS "createdAt", a.updated_at AS "updatedAt",
-            EXISTS (SELECT 1 FROM agent_runtime_tokens t WHERE t.agent_id=a.id AND t.revoked_at IS NULL) AS "runtimeConnected"
+            EXISTS (SELECT 1 FROM agent_runtime_tokens t WHERE t.agent_id=a.id AND t.revoked_at IS NULL
+              AND (t.expires_at IS NULL OR t.expires_at > now())) AS "runtimeConnected",
+            (SELECT t.expires_at FROM agent_runtime_tokens t WHERE t.agent_id=a.id AND t.revoked_at IS NULL
+              ORDER BY t.created_at DESC LIMIT 1) AS "runtimeExpiresAt"
        FROM work_agents a WHERE a.owner_user_id=$1 ORDER BY a.created_at DESC`,
     [request.auth!.userId],
   );
@@ -37,7 +41,7 @@ agentsRouter.get("/mine", requireAuth, async (request, response) => {
 });
 
 agentsRouter.post("/", requireAuth, async (request, response) => {
-  const input = agentInput.parse(request.body);
+  const input = agentInput.extend({ expiresInDays: tokenLifetimeDays }).parse(request.body);
   const token = newAgentRuntimeToken();
   const client = await pool.connect();
   try {
@@ -47,15 +51,25 @@ agentsRouter.post("/", requireAuth, async (request, response) => {
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [request.auth!.userId, request.auth!.walletAddress, input.name, input.description, input.categories, input.capabilities],
     );
-    await client.query(
-      "INSERT INTO agent_runtime_tokens (agent_id, token_hash) VALUES ($1,$2)",
-      [inserted.rows[0].id, hashAgentRuntimeToken(token)],
+    const tokenResult = await client.query<{ expires_at: Date }>(
+      `INSERT INTO agent_runtime_tokens (agent_id, token_hash, expires_at)
+       VALUES ($1,$2,now() + ($3::int * interval '1 day')) RETURNING expires_at`,
+      [inserted.rows[0].id, hashAgentRuntimeToken(token), input.expiresInDays],
     );
     await client.query("COMMIT");
     response.status(201).json({
-      data: { id: inserted.rows[0].id, ...input, ownerWallet: request.auth!.walletAddress, active: true },
-      runtimeToken: token,
-      tokenWarning: "Copy this token now. It is shown only once and grants this agent access to claim and submit commissions.",
+      data: {
+        id: inserted.rows[0].id,
+        name: input.name,
+        description: input.description,
+        categories: input.categories,
+        capabilities: input.capabilities,
+        ownerWallet: request.auth!.walletAddress,
+        active: true,
+        runtimeExpiresAt: tokenResult.rows[0].expires_at,
+        runtimeToken: token,
+      },
+      tokenWarning: "Copy this token now. It is shown only once and expires on the date shown.",
     });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -67,6 +81,7 @@ agentsRouter.post("/", requireAuth, async (request, response) => {
 
 agentsRouter.post("/:id/runtime-token", requireAuth, async (request, response) => {
   const id = z.string().uuid().parse(request.params.id);
+  const input = z.object({ expiresInDays: tokenLifetimeDays }).parse(request.body ?? {});
   const token = newAgentRuntimeToken();
   const client = await pool.connect();
   try {
@@ -74,9 +89,16 @@ agentsRouter.post("/:id/runtime-token", requireAuth, async (request, response) =
     const owned = await client.query("SELECT 1 FROM work_agents WHERE id=$1 AND owner_user_id=$2 FOR UPDATE", [id, request.auth!.userId]);
     if (!owned.rowCount) throw new ApiError(404, "agent_not_found", "Agent not found for this wallet.");
     await client.query("UPDATE agent_runtime_tokens SET revoked_at=COALESCE(revoked_at,now()) WHERE agent_id=$1", [id]);
-    await client.query("INSERT INTO agent_runtime_tokens (agent_id, token_hash) VALUES ($1,$2)", [id, hashAgentRuntimeToken(token)]);
+    const tokenResult = await client.query<{ expires_at: Date }>(
+      `INSERT INTO agent_runtime_tokens (agent_id, token_hash, expires_at)
+       VALUES ($1,$2,now() + ($3::int * interval '1 day')) RETURNING expires_at`,
+      [id, hashAgentRuntimeToken(token), input.expiresInDays],
+    );
     await client.query("COMMIT");
-    response.status(201).json({ data: { agentId: id, runtimeToken: token }, tokenWarning: "Copy this token now. It is shown only once." });
+    response.status(201).json({
+      data: { agentId: id, runtimeToken: token, expiresAt: tokenResult.rows[0].expires_at },
+      tokenWarning: "Copy this token now. It is shown only once.",
+    });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
