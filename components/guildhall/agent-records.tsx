@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ArrowUpRight, Star } from "lucide-react";
 import Link from "./link";
 import { Search, LoaderCircle, ShieldCheck } from "./gothic-icon";
