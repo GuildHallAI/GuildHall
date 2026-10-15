@@ -31,10 +31,24 @@ import { loadSolanaFeePayer } from "./solana-fee-payer.js";
 import { migrationStatus } from "./db/migrate.js";
 
 const app = express();
+let startupReady = false;
+
+export function markStartupReady() {
+  startupReady = true;
+}
 
 app.disable("x-powered-by");
 app.set("trust proxy", config.TRUST_PROXY);
 app.use(express.json({ limit: "256kb" }));
+app.use((request, response, next) => {
+  if (startupReady || request.path === "/health" || request.path === "/ready") {
+    next();
+    return;
+  }
+  response.status(503).json({
+    error: { code: "service_starting", message: "GuildHall API startup is still in progress." },
+  });
+});
 
 app.use("/health", healthRouter);
 app.use("/internal", internalRouter);
@@ -162,9 +176,10 @@ app.get("/ready", async (_request, response) => {
     fundedProvingGroundTrading: Boolean(config.USDC_MINT && config.JUPITER_API_KEY),
     charterBuybacks: Boolean(config.JUPITER_API_KEY),
   };
-  const ready = Object.values(checks).every((check) => check === "ok");
+  const ready = startupReady && Object.values(checks).every((check) => check === "ok");
   response.status(ready ? 200 : 503).json({
     status: ready ? "ready" : "not_ready",
+    startup: startupReady ? "complete" : "in_progress",
     cluster: config.SOLANA_CLUSTER,
     checks,
     features,
