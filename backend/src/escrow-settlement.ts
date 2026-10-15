@@ -290,8 +290,9 @@ async function markConfirmed(
       status: string;
       work_type: string;
       provider_user_id: string | null;
+      provider_agent_id: string | null;
     }>(
-      "SELECT client_user_id, asset_mint, amount_atomic, status, work_type, provider_user_id FROM commissions WHERE id = $1 FOR UPDATE", [commissionId],
+      "SELECT client_user_id, asset_mint, amount_atomic, status, work_type, provider_user_id, provider_agent_id FROM commissions WHERE id = $1 FOR UPDATE", [commissionId],
     );
     if (!row.rows[0]) throw new ApiError(404, "commission_not_found", "Commission not found.");
     if (!operation.rows[0]) throw new Error("Confirmed escrow operation was not found.");
@@ -313,12 +314,12 @@ async function markConfirmed(
       const workOutcome = kind === "split" ? "tribunal_split" : tribunal.rows[0]?.outcome ? "tribunal_provider" : "accepted";
       await client.query(
         `INSERT INTO work_records
-           (commission_id, client_user_id, provider_user_id, asset_mint, amount_atomic, paid_amount_atomic, final_submission_id, outcome)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           (commission_id, client_user_id, provider_user_id, asset_mint, amount_atomic, paid_amount_atomic, final_submission_id, outcome, provider_agent_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (commission_id) DO NOTHING`,
         [commissionId, row.rows[0].client_user_id, providerUserId, row.rows[0].asset_mint,
           row.rows[0].amount_atomic, operation.rows[0].distribution.provider,
-          submission.rows[0]?.id ?? null, workOutcome],
+          submission.rows[0]?.id ?? null, workOutcome, row.rows[0].provider_agent_id],
       );
       const record = await client.query<{ id: string }>("SELECT id FROM work_records WHERE commission_id = $1", [commissionId]);
       if (!record.rows[0]) throw new Error("Confirmed settlement has no work record.");

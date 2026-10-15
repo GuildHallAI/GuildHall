@@ -196,7 +196,7 @@ registryRouter.get("/:wallet/work-records", async (request, response) => {
        SELECT p.work_record_id, p.user_id, p.amount_atomic AS paid_atomic
          FROM work_record_payouts p
      )
-     SELECT wr.commission_id, wr.asset_mint, wr.amount_atomic::text, p.paid_atomic::text AS paid_amount_atomic,
+     SELECT wr.commission_id, wr.provider_agent_id, wr.asset_mint, wr.amount_atomic::text, p.paid_atomic::text AS paid_amount_atomic,
             COALESCE(
               (SELECT jsonb_agg(jsonb_build_object('wallet', split.wallet_address, 'amountAtomic', split.amount_atomic::text)
                                 ORDER BY split.wallet_address)

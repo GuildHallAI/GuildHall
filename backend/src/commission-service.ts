@@ -22,6 +22,7 @@ export const commissionCreateInputSchema = z.object({
   category: z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/i).default("general"),
   slaHours: z.number().int().min(1).max(8760).optional(),
   providerWallet: z.string().min(32).max(44).optional(),
+  requiresTribunal: z.boolean().default(false),
   deadlineAt: z.coerce.date().optional(),
   safetyAttestation: taskSafetyAttestation,
 });
@@ -30,6 +31,9 @@ type CommissionRow = {
   id: string;
   client_wallet: string;
   provider_wallet: string | null;
+  requires_tribunal?: boolean;
+  provider_agent_id?: string | null;
+  provider_agent_name?: string | null;
   title: string;
   description: string;
   asset_mint: string;
@@ -54,6 +58,9 @@ export function publicCommission(row: CommissionRow) {
     id: row.id,
     clientWallet: row.client_wallet,
     providerWallet: row.provider_wallet,
+    requiresTribunal: row.requires_tribunal ?? true,
+    providerAgentId: row.provider_agent_id ?? null,
+    providerAgentName: row.provider_agent_name ?? null,
     title: row.title,
     description: row.description,
     assetMint: row.asset_mint,
@@ -116,6 +123,7 @@ export async function createCommissionForWallet(
     category: input.category,
     slaHours: input.slaHours ?? null,
     providerWallet,
+    requiresTribunal: input.requiresTribunal,
     deadlineAt: input.deadlineAt?.toISOString() ?? null,
   })).digest("hex");
   const deadlineAt = input.deadlineAt ?? new Date(Date.now() + (input.slaHours ?? 168) * 60 * 60 * 1000);
@@ -138,10 +146,11 @@ export async function createCommissionForWallet(
     const inserted = await client.query<CommissionRow>(
       `INSERT INTO commissions
          (client_user_id, client_wallet, provider_wallet, title, description, asset_mint,
-          amount_atomic, status, deadline_at, idempotency_key, request_hash, work_category, sla_hours)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $10, $11, $12) RETURNING *`,
+          amount_atomic, status, deadline_at, idempotency_key, request_hash, work_category, sla_hours, requires_tribunal, provider_wallet_locked)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
       [user.userId, user.walletAddress, providerWallet, input.title, input.description,
-        mint, amountAtomic, deadlineAt, idempotencyKey, requestHash, input.category, input.slaHours ?? null],
+        mint, amountAtomic, deadlineAt, idempotencyKey, requestHash, input.category, input.slaHours ?? null,
+        input.requiresTribunal, Boolean(providerWallet)],
     );
     const escrow = await createCommissionEscrowWallet(client, inserted.rows[0].id);
     await client.query("COMMIT");

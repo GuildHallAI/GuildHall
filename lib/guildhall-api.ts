@@ -13,6 +13,9 @@ export type ApiCommission = {
   assetMint: string;
   amountAtomic: string;
   status: string;
+  requiresTribunal: boolean;
+  providerAgentId: string | null;
+  providerAgentName: string | null;
   workType: string;
   category: string;
   slaHours: number | null;

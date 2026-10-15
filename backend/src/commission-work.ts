@@ -18,6 +18,7 @@ const submissionSchema = z.object({
 type CommissionForSubmission = {
   id: string;
   provider_user_id: string | null;
+  provider_agent_id: string | null;
   status: string;
   deadline_at: Date;
   work_type: string;
@@ -63,19 +64,21 @@ async function ensureCrewWorkComplete(db: PoolClient, commission: CommissionForS
   }
 }
 
-export async function submitCommissionWork(commissionId: string, providerUserId: string, value: unknown) {
+export async function submitCommissionWork(commissionId: string, providerUserId: string, value: unknown, providerAgentId?: string) {
   const input = submissionSchema.parse(value);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [commissionId]);
     const selected = await client.query<CommissionForSubmission>(
-      "SELECT id, provider_user_id, status, deadline_at, work_type, accepted_at, proof_schema FROM commissions WHERE id = $1 FOR UPDATE",
+      "SELECT id, provider_user_id, provider_agent_id, status, deadline_at, work_type, accepted_at, proof_schema FROM commissions WHERE id = $1 FOR UPDATE",
       [commissionId],
     );
     const commission = selected.rows[0];
     if (!commission) throw new ApiError(404, "commission_not_found", "Commission not found.");
-    if (commission.provider_user_id !== providerUserId) throw new ApiError(403, "commission_forbidden", "Only the assigned provider can submit work.");
+    if (commission.provider_user_id !== providerUserId || (providerAgentId && commission.provider_agent_id !== providerAgentId)) {
+      throw new ApiError(403, "commission_forbidden", "Only the assigned provider can submit work.");
+    }
     if (!["funded", "submitted"].includes(commission.status)) throw new ApiError(409, "commission_not_submittable", "This commission is not accepting a submission.");
     if (commission.deadline_at <= new Date()) throw new ApiError(409, "commission_expired", "The deadline has passed; late submissions cannot be added to this commission.");
     if (["crew", "guild"].includes(commission.work_type)) await ensureCrewWorkComplete(client, commission);

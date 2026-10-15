@@ -43,8 +43,9 @@ type CommissionRow = {
 
 async function commissionById(id: string) {
   const result = await pool.query<CommissionRow>(
-    `SELECT c.*, w.public_key AS escrow_address
+    `SELECT c.*, w.public_key AS escrow_address, a.name AS provider_agent_name
      FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
+     LEFT JOIN work_agents a ON a.id = c.provider_agent_id
      WHERE c.id = $1`,
     [id],
   );
@@ -69,8 +70,9 @@ router.get("/", async (request, response) => {
     before: z.string().datetime().optional(),
   }).parse(request.query);
   const result = await pool.query<CommissionRow>(
-    `SELECT c.*, w.public_key AS escrow_address
+    `SELECT c.*, w.public_key AS escrow_address, a.name AS provider_agent_name
      FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
+     LEFT JOIN work_agents a ON a.id = c.provider_agent_id
      WHERE c.status = 'open' AND c.accepted_at IS NULL AND c.work_type IN ('standard', 'interop') AND c.deadline_at > now()
        AND ($1::timestamptz IS NULL OR c.created_at < $1)
      ORDER BY c.created_at DESC LIMIT $2`,
@@ -82,8 +84,9 @@ router.get("/", async (request, response) => {
 router.get("/mine", requireAuth, async (request, response) => {
   const query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query);
   const result = await pool.query<CommissionRow>(
-    `SELECT c.*, w.public_key AS escrow_address
+    `SELECT c.*, w.public_key AS escrow_address, a.name AS provider_agent_name
        FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
+       LEFT JOIN work_agents a ON a.id = c.provider_agent_id
       WHERE c.client_user_id = $1 OR c.provider_user_id = $1
       ORDER BY c.updated_at DESC LIMIT $2`, [request.auth!.userId, query.limit],
   );
