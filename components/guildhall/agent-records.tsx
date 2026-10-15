@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { ArrowUpRight, Star } from "lucide-react";
 import Link from "./link";
 import { Search, LoaderCircle, ShieldCheck } from "./gothic-icon";
@@ -42,17 +42,17 @@ const prettyDate = (value: string) => new Intl.DateTimeFormat("en", { dateStyle:
 export function AgentDirectory() {
   const [search, setSearch] = useState("");
   const [agents, setAgents] = useState<AgentSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    guildhallApi<AgentSummary[]>("/agents").then(setAgents)
-      .catch((cause) => setError((cause as Error).message || "Could not load agents."))
-      .finally(() => setLoading(false));
-  }, []);
-
   const searchAgents = async (term: string) => {
+    if (!term.trim()) {
+      setAgents([]);
+      setSearched(false);
+      setError("");
+      return;
+    }
     setSearched(Boolean(term));
     setError("");
     setLoading(true);
@@ -78,21 +78,22 @@ export function AgentDirectory() {
       <form className="agent-search-form" onSubmit={(event) => void runSearch(event)}>
         <label htmlFor="agent-search"><Search size={18} /><span className="sr-only">Search agent name, ID, or slug</span></label>
         <Input id="agent-search" autoComplete="off" placeholder="Agent name, ID, or slug" value={search} onChange={(event) => setSearch(event.target.value)} />
-        <Button type="submit" className="button button-gold" disabled={loading}>{loading ? <LoaderCircle className="spin" size={17} /> : "Search records"}</Button>
+        <Button type="submit" className="button button-gold" disabled={loading || !search.trim()}>{loading ? <LoaderCircle className="spin" size={17} /> : "Search records"}</Button>
       </form>
       <span className="agent-records-caption">LIVE AGENT PROFILES · SOLANA</span>
     </header>
     <section className="agent-directory-results" aria-live="polite">
-      <div className="panel-heading"><h2>{searched ? "Matching agents" : "Registered agents"}</h2><span className="mono muted">{agents.length} PROFILES</span></div>
+      {searched && <div className="panel-heading"><h2>Matching agents</h2><span className="mono muted">{agents.length} PROFILES</span></div>}
       {error ? <div className="agent-records-empty"><p>{error}</p><Button variant="outline" className="button" onClick={() => void searchAgents(search.trim())}>Try again</Button></div>
         : loading ? <div className="agent-records-empty"><LoaderCircle className="spin" /><p>Loading agent profiles…</p></div>
-          : agents.length ? <div className="agent-directory-grid">{agents.map((agent) => <Link href={`/agents/${encodeURIComponent(agent.id)}`} className="agent-directory-card" key={agent.id}>
+          : !searched ? <div className="agent-records-empty"><Search size={28} /><h3>Search agent records</h3><p>Enter an agent name, ID, or profile slug to open its work history.</p></div>
+            : agents.length ? <div className="agent-directory-grid">{agents.map((agent) => <Link href={`/agents/${encodeURIComponent(agent.id)}`} className="agent-directory-card" key={agent.id}>
             <div className="agent-directory-card-top"><span className="eyebrow">{agent.categories[0] ?? "GENERAL"}</span><ArrowUpRight size={18} /></div>
             <h3>{agent.name}</h3><p>{agent.description}</p>
             <div className="agent-directory-tags">{agent.capabilities.slice(0, 4).map((capability) => <span key={capability}>{capability}</span>)}</div>
             <footer><code>{agent.id}</code><span>View work record ↗</span></footer>
           </Link>)}</div>
-          : <div className="agent-records-empty"><ShieldCheck size={28} /><h3>{searched ? "No agent matched that search" : "No active agent profiles yet"}</h3><p>{searched ? "Check the spelling, or search by the agent’s ID or profile slug." : "Registered public profiles will appear here."}</p></div>}
+          : <div className="agent-records-empty"><ShieldCheck size={28} /><h3>No agent matched that search</h3><p>Check the spelling, or search by the agent’s ID or profile slug.</p></div>}
     </section>
   </main>;
 }
