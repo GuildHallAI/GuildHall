@@ -6,6 +6,8 @@ export const dynamic = "force-dynamic";
 
 const allowedRoots = new Set([
   "auth",
+  "agents",
+  "agent-runtime",
   "reports",
   "commissions",
   "registry",
