@@ -98,6 +98,82 @@ router.post("/", requireAuth, async (request, response) => {
   response.status(result.idempotentReplay ? 200 : 201).json(result);
 });
 
+router.post("/:id/cancel", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const selected = await client.query<{
+      client_user_id: string; status: string; accepted_at: Date | null; funding_signature: string | null; asset_mint: string;
+      funding_instructions_last_valid_block_height: string | null; escrow_address: string | null;
+    }>(
+      `SELECT c.client_user_id, c.status, c.accepted_at, c.funding_signature, c.asset_mint,
+              c.funding_instructions_last_valid_block_height::text, w.public_key AS escrow_address
+         FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
+        WHERE c.id = $1 FOR UPDATE OF c`, [id],
+    );
+    const commission = selected.rows[0];
+    if (!commission) throw new ApiError(404, "commission_not_found", "Commission not found.");
+    if (commission.client_user_id !== request.auth!.userId) {
+      throw new ApiError(403, "commission_cancel_forbidden", "Only the commission owner can take it down.");
+    }
+    if (commission.status === "cancelled") {
+      await client.query("COMMIT");
+      response.json({ data: { id, status: "cancelled", alreadyCancelled: true } });
+      return;
+    }
+    if (commission.status !== "open" || commission.accepted_at || commission.funding_signature) {
+      throw new ApiError(409, "commission_not_cancellable", "Only an unclaimed, open, unfunded commission can be taken down.");
+    }
+
+    const surety = await client.query<{ state: string }>(
+      `SELECT state FROM surety_policies
+        WHERE commission_id = $1 AND state IN ('awaiting_premium', 'active', 'claim_pending', 'claim_submitted')
+        LIMIT 1`, [id],
+    );
+    if (surety.rows[0]) {
+      throw new ApiError(409, "commission_surety_active", "Cancel or resolve this commission's Surety policy before taking it down.");
+    }
+    if (commission.funding_instructions_last_valid_block_height) {
+      const currentHeight = await connection.getBlockHeight("processed");
+      if (currentHeight <= Number(commission.funding_instructions_last_valid_block_height)) {
+        throw new ApiError(409, "funding_transaction_still_valid", "Wait for the funding transaction to confirm or expire before taking down this commission.");
+      }
+    }
+    if (commission.escrow_address) {
+      const escrowTokenAccount = getAssociatedTokenAddressSync(
+        new PublicKey(commission.asset_mint), new PublicKey(commission.escrow_address),
+      );
+      const account = await connection.getAccountInfo(escrowTokenAccount, "processed");
+      if (account) {
+        const balance = await connection.getTokenAccountBalance(escrowTokenAccount, "processed");
+        if (BigInt(balance.value.amount) > 0n) {
+          throw new ApiError(409, "commission_escrow_not_empty", "This commission's escrow already has funds. Confirm its funding before taking it down.");
+        }
+      }
+    }
+
+    await client.query(
+      "UPDATE interop_job_exports SET unpublished_at = COALESCE(unpublished_at, now()) WHERE commission_id = $1",
+      [id],
+    );
+    await client.query(
+      `UPDATE commissions
+          SET status = 'cancelled', provider_user_id = NULL, provider_agent_id = NULL,
+              provider_wallet = CASE WHEN provider_wallet_locked THEN provider_wallet ELSE NULL END,
+              accepted_at = NULL, updated_at = now()
+        WHERE id = $1`, [id],
+    );
+    await client.query("COMMIT");
+    response.json({ data: { id, status: "cancelled", alreadyCancelled: false } });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 router.get("/:id", async (request, response) => {
   const commission = await commissionById(uuidSchema.parse(request.params.id));
   response.json({ data: publicCommission(commission) });

@@ -7,6 +7,7 @@ import Link from "./link";
 import { LayoutDashboard, ScrollText, Plus, RefreshCw, LoaderCircle, Clock, ShieldCheck, Search, Layers3 } from "./gothic-icon";
 import { Sidebar, SidebarProvider, SidebarHeader, SidebarContent, SidebarFooter, SidebarInset, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarGroup, SidebarGroupLabel, SidebarTrigger } from "@/components/ui/sidebar";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +29,7 @@ const navItems = [
 const categories = ["development", "research", "design", "data", "operations", "general"];
 const statusLabel: Record<string, string> = {
   open: "Open", funded: "Funded", submitted: "Submitted", approved: "Settling", disputed: "In Tribunal",
-  complete: "Complete", refunded: "Refunded", cancelled: "Cancelled", expired: "Expired",
+  complete: "Complete", refunded: "Refunded", cancelled: "Taken down", expired: "Expired",
 };
 const amount = (atomic: string) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(Number(BigInt(atomic)) / 1_000_000);
 const shortWallet = (wallet: string) => `${wallet.slice(0, 5)}…${wallet.slice(-4)}`;
@@ -98,6 +99,8 @@ function LiveWorkspace() {
   const [submissionsLoading, setSubmissionsLoading] = useState(false);
   const [fundingBusy, setFundingBusy] = useState(false);
   const [pendingFunding, setPendingFunding] = useState<{ commissionId: string } & PendingFunding | null>(null);
+  const [takeDownOpen, setTakeDownOpen] = useState(false);
+  const [takingDown, setTakingDown] = useState(false);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -201,6 +204,30 @@ function LiveWorkspace() {
     } finally { setFundingBusy(false); }
   };
 
+  const takeDownCommission = async () => {
+    if (!detail || !session || session.walletAddress !== detail.clientWallet) return;
+    if (pendingFunding?.commissionId === detail.id) {
+      toast.error("Check the funding transaction first. It may still confirm on Solana.");
+      setTakeDownOpen(false);
+      return;
+    }
+    setTakingDown(true);
+    try {
+      await guildhallApi<{ data: { id: string; status: string } }>(`/commissions/${detail.id}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setDetail({ ...detail, status: "cancelled" });
+      setTakeDownOpen(false);
+      toast.success("Commission taken down from the open work board.");
+      await refresh();
+    } catch (cause) {
+      toast.error((cause as Error).message || "Could not take down this commission.");
+    } finally {
+      setTakingDown(false);
+    }
+  };
+
   const createCommission = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!session) { toast.error("Connect a wallet before posting a commission."); return; }
@@ -296,6 +323,7 @@ function LiveWorkspace() {
       </main>
     </SidebarInset>
     <Toaster theme="dark" position="bottom-right" />
+    <AlertDialog open={takeDownOpen} onOpenChange={setTakeDownOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Take down this commission?</AlertDialogTitle><AlertDialogDescription>This removes the commission from the open work board. Only unclaimed, open commissions with no escrow funding can be taken down. If a funding transaction was recently prepared, wait for it to expire first. Surety policies must also be cancelled or resolved.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep commission open</AlertDialogCancel><AlertDialogAction disabled={takingDown} onClick={(event) => { event.preventDefault(); void takeDownCommission(); }}>{takingDown ? "Taking down…" : "Take down commission"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="commission-dialog"><DialogTitle>Post a commission</DialogTitle><DialogDescription>Set the work, budget, and deadline. The commission becomes active after escrow funding.</DialogDescription><form className="guild-form" onSubmit={(event) => void createCommission(event)}>
       <div><Label htmlFor="live-title">Title</Label><Input id="live-title" required minLength={3} maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></div>
       <div><Label htmlFor="live-description">Work and acceptance criteria</Label><Textarea id="live-description" required minLength={1} maxLength={5000} rows={5} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></div>
@@ -309,7 +337,7 @@ function LiveWorkspace() {
     <Sheet open={!!detail} onOpenChange={(open) => { if (!open) { setDetail(null); setAction(null); setSubmissions([]); } }}><SheetContent className="commission-sheet">{detail && <><span className="eyebrow">{detail.category} / {statusLabel[detail.status] ?? detail.status}</span><SheetTitle>{detail.title}</SheetTitle><SheetDescription>Commission · {amount(detail.amountAtomic)} {assetName(detail)} · due {date(detail.deadlineAt)}</SheetDescription><div className="detail-section"><h3>Work and acceptance criteria</h3><p>{detail.description}</p></div><div className="detail-section"><h3>Parties</h3><div className="mandate-row"><span>Client</span><b>{shortWallet(detail.clientWallet)}</b></div><div className="mandate-row"><span>Provider</span><b>{detail.providerAgentName ?? (detail.providerWallet ? shortWallet(detail.providerWallet) : "Unassigned")}</b></div><div className="mandate-row"><span>Escrow</span><b>{detail.escrowAddress ? shortWallet(detail.escrowAddress) : "Preparing"}</b></div><div className="mandate-row"><span>Funding</span><b>{detail.fundingSignature ? "Confirmed on Solana" : "Awaiting client funding"}</b></div></div>
       {session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <div className="detail-section live-submission">{submissionsLoading ? <p>Loading submitted work…</p> : latestSubmission ? <><h3>Submission · revision {latestSubmission.revision}</h3><p>{latestSubmission.summary}</p>{latestSubmission.evidence.map((item, index) => <div className="live-evidence" key={`${latestSubmission.id}-${index}`}><strong>{item.label || item.kind}</strong><span>{item.value}</span></div>)}</> : <p>Submission details are unavailable. Refresh and try again.</p>}</div>}
       {detail.status === "open" && session?.walletAddress === detail.clientWallet && <div className="detail-section live-funding-panel"><h3>Fund commission escrow</h3><p>This will ask your connected wallet to transfer exactly <strong>{amount(detail.amountAtomic)} {assetName(detail)}</strong> from your wallet to this commission’s escrow on <strong>{assets.cluster}</strong>. Review the amount and token in your wallet before approving.</p>{pendingFunding?.commissionId === detail.id ? <Button className="button button-gold" disabled={fundingBusy} onClick={() => void confirmPendingFunding()}>{fundingBusy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}Check transaction confirmation</Button> : <Button className="button button-gold" disabled={fundingBusy || !walletConnected || publicKey?.toBase58() !== detail.clientWallet} onClick={() => void fundCommission(detail)}>{fundingBusy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}Fund escrow with {assetName(detail)}</Button>}{(!walletConnected || publicKey?.toBase58() !== detail.clientWallet) && <p className="micro-copy">Connect the same wallet that posted this commission to continue.</p>}</div>}
-      <div className="detail-actions">{session?.walletAddress === detail.providerWallet && detail.status === "funded" && <Button className="button button-gold" onClick={() => setAction("submit")}>Submit work</Button>}{session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <Button className="button button-gold" disabled={submissionsLoading || !latestSubmission} onClick={() => setAction("review")}>Review submission</Button>}{detail.status === "open" && session?.walletAddress !== detail.clientWallet && <Button className="button button-gold" onClick={() => void acceptWork(detail)}>Accept work</Button>}{!session && <p className="micro-copy">Connect your wallet to claim work or manage this commission.</p>}</div>
+      <div className="detail-actions">{session?.walletAddress === detail.providerWallet && detail.status === "funded" && <Button className="button button-gold" onClick={() => setAction("submit")}>Submit work</Button>}{session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <Button className="button button-gold" disabled={submissionsLoading || !latestSubmission} onClick={() => setAction("review")}>Review submission</Button>}{detail.status === "open" && session?.walletAddress !== detail.clientWallet && <Button className="button button-gold" onClick={() => void acceptWork(detail)}>Accept work</Button>}{session?.walletAddress === detail.clientWallet && detail.status === "open" && <Button variant="outline" className="button" disabled={takingDown || fundingBusy || pendingFunding?.commissionId === detail.id} onClick={() => setTakeDownOpen(true)}>{takingDown ? <LoaderCircle className="spin" size={16} /> : null}Take down commission</Button>}{!session && <p className="micro-copy">Connect your wallet to claim work or manage this commission.</p>}</div>
       </>}</SheetContent></Sheet>
     <Dialog open={!!action} onOpenChange={(open) => { if (!open) setAction(null); }}><DialogContent className="commission-dialog"><DialogTitle>{action === "submit" ? "Submit work" : "Review submission"}</DialogTitle><DialogDescription>{action === "submit" ? "Your submission is encrypted at rest before the client can review it." : detail?.requiresTribunal ? "Acceptance sends the submission to independent Tribunal review." : "Acceptance starts payment to the provider. Either party can open a Tribunal dispute before approval."}</DialogDescription>{action === "submit" ? <form className="guild-form" onSubmit={(event) => void submitWork(event)}><div><Label htmlFor="work-summary">Summary</Label><Input id="work-summary" required minLength={1} maxLength={5000} value={summary} onChange={(event) => setSummary(event.target.value)} /></div><div><Label htmlFor="work-evidence">Evidence or deliverable URL</Label><Textarea id="work-evidence" required minLength={1} maxLength={4000} rows={4} value={evidence} onChange={(event) => setEvidence(event.target.value)} /></div><div className="form-actions"><Button type="button" variant="ghost" onClick={() => setAction(null)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy}>Submit encrypted work</Button></div></form> : <form className="guild-form" onSubmit={(event) => void reviewWork(event)}><div><Label>Decision</Label><Select value={decision} onValueChange={setDecision}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="accept">{detail?.requiresTribunal ? "Accept · Tribunal review" : "Accept · release payment"}</SelectItem><SelectItem value="request_changes">Request changes</SelectItem><SelectItem value="dispute">Open Tribunal dispute</SelectItem></SelectContent></Select></div><div><Label htmlFor="review-rationale">Rationale</Label><Textarea id="review-rationale" required minLength={1} maxLength={10000} rows={4} value={rationale} onChange={(event) => setRationale(event.target.value)} /></div><div className="form-actions"><Button type="button" variant="ghost" onClick={() => setAction(null)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy}>Submit review</Button></div></form>}</DialogContent></Dialog>
   </>;
