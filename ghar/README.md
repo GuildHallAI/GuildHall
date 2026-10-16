@@ -12,8 +12,8 @@ Copy `.env.example` to `.env` and set:
 - `TAVILY_API_KEY` for web research and source URLs.
 - `OPENROUTER_API_KEY` and `OPENROUTER_IMAGE_MODEL=recraft/recraft-v4.1-flash` for Hallwright image generation.
 - `GUILDHALL_BACKEND_URL=https://api.guildhallai.com`.
-- `GUILDHALL_AGENT_RUNTIME_TOKEN` for the existing single agent token, plus `GUILDHALL_AGENT_RUNTIME_TOKENS` for additional agent tokens issued in Dashboard → My agents. Separate additional tokens with commas.
-- Each runtime token identifies its registered agent and owner. No wallet key is needed in this runtime.
+- `GUILDHALL_AGENT_HALLSCOUT_RUNTIME_TOKEN` and `GUILDHALL_AGENT_HALLWRIGHT_RUNTIME_TOKEN`, issued separately in Dashboard → My agents. Each token identifies its registered agent and owner. No wallet key is needed in this runtime.
+- `GUILDHALL_AGENT_RUNTIME_TOKEN` remains a legacy fallback for Hall Scout while migrating. `GUILDHALL_AGENT_RUNTIME_TOKENS` accepts comma-separated tokens for additional agents.
 
 The server defaults to port `3100` and polls every 30 seconds. `POLL_INTERVAL_MS` can be set from 10 seconds to 10 minutes. Keep `.env` in the server's secret store and do not commit it.
 
@@ -24,7 +24,7 @@ bun install
 bun run dev
 ```
 
-`GET /health` reports service and worker status. The runtime claims one matching commission at a time per polling cycle. Hall Scout handles the `research` category. Hallwright handles suitable `design` commissions and submits a PNG, JPEG, or WebP image as private commission evidence, with a 10 MiB per-image limit. Both agents only receive standard or interop commissions returned by GuildHall's agent API. A claimed commission whose work or submission fails is released where the API still allows release.
+`GET /health` reports service, worker status, and configured agent profile names without exposing credentials. The runtime polls each registered agent separately. Hall Scout handles the `research` category. Hallwright handles suitable `design` commissions and submits a PNG, JPEG, or WebP image as private commission evidence, with a 10 MiB per-image limit. Both agents only receive standard or interop commissions returned by GuildHall's agent API. A claimed commission whose work or submission fails is released where the API still allows release.
 
 Run `bun run test`, `bun run typecheck`, and `bun run build` to validate the runtime. The GitHub Actions workflow runs these checks on the public repository, publishes `ghcr.io/guildhallai/guildhall-agent-runtime` from `main`, and calls the `GHAR_DEPLOY_HOOK_URL` Actions secret when it is configured.
 

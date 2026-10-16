@@ -15,6 +15,7 @@ const server = Bun.serve({
         service: "guildhall-agent-runtime",
         agent: "GuildHall agent runtime",
         configuredAgentProfiles: config.runtimeTokens.length,
+        agents: config.runtimeProfiles.map((profile) => profile.name),
         imageGeneration: Boolean(config.openRouterApiKey),
         commit: process.env.BUILD_COMMIT ?? "unknown",
         worker: workerStatus(),

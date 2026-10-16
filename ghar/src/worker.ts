@@ -16,8 +16,10 @@ export function isResearchCommission(commission: Pick<Commission, "category">) {
   return commission.category.trim().toLowerCase() === "research";
 }
 
-async function handleCommission(commission: Commission, token: string): Promise<boolean> {
+async function handleCommission(commission: Commission, token: string, profileName: string): Promise<boolean> {
   if (!isResearchCommission(commission) && !isImageCommission(commission)) return false;
+  if (profileName === "hall-scout" && !isResearchCommission(commission)) return false;
+  if (profileName === "hallwright" && !isImageCommission(commission)) return false;
   if (isImageCommission(commission) && !config.openRouterApiKey) {
     console.info(`[Hallwright] Skipping ${commission.id}: OPENROUTER_API_KEY is not configured.`);
     return false;
@@ -71,12 +73,12 @@ async function pollOnce() {
   lastPollAt = new Date().toISOString();
   lastError = null;
   try {
-    for (const [index, token] of config.runtimeTokens.entries()) {
+    for (const [index, profile] of config.runtimeProfiles.entries()) {
       try {
-        const commissions = await listCommissions(token);
+        const commissions = await listCommissions(profile.token);
         for (const commission of commissions) {
           try {
-            if (await handleCommission(commission, token)) break;
+            if (await handleCommission(commission, profile.token, profile.name)) break;
           } catch (error) {
             lastError = error instanceof Error ? error.message : "Unknown worker error.";
             const agent = isImageCommission(commission) ? "Hallwright" : "Hall Scout";
@@ -85,7 +87,7 @@ async function pollOnce() {
         }
       } catch (error) {
         lastError = error instanceof Error ? error.message : "Unknown polling error.";
-        console.error(`[GuildHall agent runtime] Poll failed for configured credential ${index + 1}:`, lastError);
+        console.error(`[GuildHall agent runtime] Poll failed for ${profile.name || `configured credential ${index + 1}`}:`, lastError);
       }
     }
   } catch (error) {

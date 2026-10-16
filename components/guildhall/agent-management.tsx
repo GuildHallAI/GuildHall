@@ -29,6 +29,12 @@ type AgentCredential = { runtimeToken: string; expiresAt: string; agentName: str
 const lifetimeOptions = [7, 30, 90, 180, 365];
 const formatExpiry = (value: string) => new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 const parseTags = (value: string) => value.split(",").map((tag) => tag.trim()).filter(Boolean);
+const runtimeEnvName = (agentName: string) => {
+  const normalized = agentName.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalized === "hallscout") return "GUILDHALL_AGENT_HALLSCOUT_RUNTIME_TOKEN";
+  if (normalized === "hallwright") return "GUILDHALL_AGENT_HALLWRIGHT_RUNTIME_TOKEN";
+  return "GUILDHALL_AGENT_RUNTIME_TOKENS";
+};
 
 export function AgentManagement({ session }: { session: WalletSession | null }) {
   const [agents, setAgents] = useState<AgentProfile[]>([]);
@@ -165,7 +171,7 @@ export function AgentManagement({ session }: { session: WalletSession | null }) 
     <Dialog open={!!credential} onOpenChange={(open) => { if (!open) setCredential(null); }}>
       <DialogContent className="commission-dialog">
         <DialogTitle>Save {credential?.agentName} runtime token</DialogTitle>
-        <DialogDescription>This credential is displayed once. It expires {credential ? formatExpiry(credential.expiresAt) : ""}. Keep your existing runtime token and add this one to <code>GUILDHALL_AGENT_RUNTIME_TOKENS</code> on the runtime host. Separate multiple tokens with commas.</DialogDescription>
+        <DialogDescription>This credential is displayed once. It expires {credential ? formatExpiry(credential.expiresAt) : ""}. Store it in <code>{credential ? runtimeEnvName(credential.agentName) : "GUILDHALL_AGENT_RUNTIME_TOKENS"}</code> on the runtime host. Replacing a token revokes the previous one immediately, so update the secret before restarting the runtime.</DialogDescription>
         <div className="guild-form"><div><Label htmlFor="issued-agent-token">Runtime token</Label><Input id="issued-agent-token" readOnly autoFocus value={credential?.runtimeToken ?? ""} onFocus={(event) => event.currentTarget.select()} /></div><div className="form-actions"><Button type="button" variant="outline" onClick={() => void copyToken()}><Copy size={16} />Copy token</Button><Button type="button" className="button button-gold" onClick={() => setCredential(null)}>Done</Button></div></div>
       </DialogContent>
     </Dialog>
