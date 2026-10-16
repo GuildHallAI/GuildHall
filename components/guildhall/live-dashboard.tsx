@@ -91,6 +91,7 @@ function CommissionCard({
     </div>
     <footer>
       <Button variant="ghost" onClick={() => onOpen(commission)}>View details</Button>
+      {commission.fundingSignature && <Link href={`/receipts/${encodeURIComponent(commission.id)}`} className="button">Proof receipt</Link>}
       {!own && commission.status === "open" && !isClient && <Button className="button button-gold" onClick={() => onAccept(commission)}>{session ? "Accept work" : "Connect to accept"}</Button>}
       {own && <span className="live-wallet-note">{isClient ? "Posted by you" : "Assigned to you"}</span>}
     </footer>

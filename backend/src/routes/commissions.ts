@@ -15,6 +15,7 @@ import { claimCommissionForWallet, createCommissionForWallet, getCommissionFundi
 import { reviewCommissionSubmission } from "../commission-review.js";
 import { discardStagedCommissionImage, stageCommissionImage } from "../commission-assets.js";
 import { readCommissionImage } from "../cloudinary-assets.js";
+import { commissionReceipt } from "../commission-receipts.js";
 
 const router = Router();
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
@@ -179,6 +180,10 @@ router.post("/:id/cancel", requireAuth, async (request, response) => {
 router.get("/:id", async (request, response) => {
   const commission = await commissionById(uuidSchema.parse(request.params.id));
   response.json({ data: publicCommission(commission) });
+});
+
+router.get("/:id/receipt", async (request, response) => {
+  response.json({ data: await commissionReceipt(uuidSchema.parse(request.params.id)) });
 });
 
 router.post("/:id/funding-instructions", requireAuth, async (request, response) => {

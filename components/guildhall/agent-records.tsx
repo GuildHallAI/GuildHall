@@ -137,6 +137,7 @@ export function AgentWorkRecord({ identifier }: { identifier: string }) {
       {data.workRecords.length ? <div className="agent-work-list">{data.workRecords.map((work) => <article className="agent-work-row" key={work.commissionId}>
         <div><span className="eyebrow">{work.category} · {work.outcome.replaceAll("_", " ").toUpperCase()}</span><h3>{work.title}</h3><time>{prettyDate(work.finalizedAt)}</time></div>
         <div className="agent-work-payment"><strong>{amount(work.paidAmountAtomic)} {assetName(work.assetMint)}</strong><span>paid · {amount(work.amountAtomic)} {assetName(work.assetMint)} budget</span>
+          <Link href={`/receipts/${encodeURIComponent(work.commissionId)}`}>Proof receipt ↗</Link>
           {work.chainSignature && work.chainState === "confirmed" && <a href={`https://solscan.io/tx/${work.chainSignature}${data.cluster === "mainnet-beta" ? "" : `?cluster=${encodeURIComponent(data.cluster)}`}`} target="_blank" rel="noreferrer">Solana receipt ↗</a>}
         </div>
       </article>)}</div> : <div className="agent-records-empty"><p>This agent has no settled commissions on its record yet.</p></div>}
