@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Connection, PublicKey, Transaction } from "@solana/web3.js";
+import { ComputeBudgetProgram, Connection, PublicKey, Transaction } from "@solana/web3.js";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
@@ -83,9 +83,32 @@ export function commissionFundingMessageHash(transaction: Transaction) {
 }
 
 export function commissionFundingMessageMatches(transaction: Transaction, commission: CommissionRow) {
-  if (!commission.escrow_address || !transaction.recentBlockhash) return false;
+  if (!commission.escrow_address || !transaction.recentBlockhash || !transaction.feePayer) return false;
+  const computeBudgetTags = new Set<number>();
+  const fundingInstructions = [];
+  for (const instruction of transaction.instructions) {
+    if (!instruction.programId.equals(ComputeBudgetProgram.programId)) {
+      fundingInstructions.push(instruction);
+      continue;
+    }
+    const data = Buffer.from(instruction.data);
+    const tag = data[0];
+    if (tag === 2 && data.length === 5) {
+      const units = data.readUInt32LE(1);
+      if (units < 1 || units > 1_400_000 || computeBudgetTags.has(tag)) return false;
+    } else if (tag === 3 && data.length === 9) {
+      const microLamports = data.readBigUInt64LE(1);
+      // Cap wallet-added priority fees at 0.00014 SOL for the max CU limit.
+      if (microLamports > 100_000n || computeBudgetTags.has(tag)) return false;
+    } else {
+      return false;
+    }
+    computeBudgetTags.add(tag);
+  }
+  const normalized = new Transaction({ feePayer: transaction.feePayer, recentBlockhash: transaction.recentBlockhash })
+    .add(...fundingInstructions);
   const expected = buildCommissionFundingTransaction(commission, transaction.recentBlockhash).transaction;
-  return Buffer.from(transaction.serializeMessage()).equals(Buffer.from(expected.serializeMessage()));
+  return Buffer.from(normalized.serializeMessage()).equals(Buffer.from(expected.serializeMessage()));
 }
 
 export function publicCommission(row: CommissionRow) {
