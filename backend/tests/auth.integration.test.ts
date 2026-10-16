@@ -7,7 +7,7 @@ import { app, markStartupReady } from "../src/app.js";
 import { migrate } from "../src/db/migrate.js";
 import { pool } from "../src/db/index.js";
 
-const wallets = [Keypair.generate(), Keypair.generate()];
+const wallets = [Keypair.generate(), Keypair.generate(), Keypair.generate()];
 
 beforeAll(async () => {
   await migrate();
@@ -216,6 +216,26 @@ describe("wallet authentication", () => {
     ]);
 
     expect(attempts.map((result) => result.status).sort()).toEqual([201, 401]);
+  });
+
+  it("keeps an active sign-in challenge valid across repeated nonce requests", async () => {
+    const wallet = wallets[2]!;
+    const walletAddress = wallet.publicKey.toBase58();
+    const first = await request(app).post("/v1/auth/nonce").send({ walletAddress }).expect(201);
+    for (let i = 0; i < 8; i += 1) {
+      const repeated = await request(app).post("/v1/auth/nonce").send({ walletAddress }).expect(201);
+      expect(repeated.body.data.nonce).toBe(first.body.data.nonce);
+      expect(repeated.body.data.message).toBe(first.body.data.message);
+    }
+    const signature = bs58.encode(nacl.sign.detached(
+      new TextEncoder().encode(first.body.data.message),
+      wallet.secretKey,
+    ));
+    await request(app).post("/v1/auth/verify").send({
+      walletAddress,
+      nonce: first.body.data.nonce,
+      signature,
+    }).expect(201);
   });
 
   it("rejects malformed wallet and signature inputs before database access", async () => {

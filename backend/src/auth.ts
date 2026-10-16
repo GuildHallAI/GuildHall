@@ -39,39 +39,47 @@ const verifyInput = z.object({
 export async function issueWalletNonce(input: unknown) {
   const { walletAddress: value } = nonceInput.parse(input);
   const walletAddress = canonicalWallet(value);
-  const nonce = randomBytes(24).toString("hex");
-  const issuedAt = new Date();
-  const expiresAt = new Date(issuedAt.getTime() + NONCE_MINUTES * 60_000);
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [walletAddress]);
     await client.query("DELETE FROM auth_nonces WHERE expires_at < now() - interval '1 day'");
-    await client.query(
-      `DELETE FROM auth_nonces WHERE nonce IN (
-         SELECT nonce FROM auth_nonces
-          WHERE wallet_address = $1 AND consumed_at IS NULL AND expires_at > now()
-          ORDER BY issued_at DESC OFFSET 4
-       )`, [walletAddress],
+    const existing = await client.query<{ nonce: string; issued_at: Date; expires_at: Date }>(
+      `SELECT nonce, issued_at, expires_at FROM auth_nonces
+        WHERE wallet_address = $1 AND consumed_at IS NULL AND expires_at > now()
+        ORDER BY issued_at DESC LIMIT 1`, [walletAddress],
     );
+    const challenge = existing.rows[0];
+    if (challenge) {
+      await client.query("COMMIT");
+      return {
+        walletAddress,
+        nonce: challenge.nonce,
+        message: messageFor(walletAddress, challenge.nonce, challenge.issued_at, challenge.expires_at),
+        expiresAt: challenge.expires_at,
+      };
+    }
+
+    const nonce = randomBytes(24).toString("hex");
+    const issuedAt = new Date();
+    const expiresAt = new Date(issuedAt.getTime() + NONCE_MINUTES * 60_000);
     await client.query(
       "INSERT INTO auth_nonces (nonce, wallet_address, issued_at, expires_at) VALUES ($1, $2, $3, $4)",
       [nonce, walletAddress, issuedAt, expiresAt],
     );
     await client.query("COMMIT");
+    return {
+      walletAddress,
+      nonce,
+      message: messageFor(walletAddress, nonce, issuedAt, expiresAt),
+      expiresAt,
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
   }
-  return {
-    walletAddress,
-    nonce,
-    message: messageFor(walletAddress, nonce, issuedAt, expiresAt),
-    expiresAt,
-  };
 }
 
 export async function createWalletSession(input: unknown) {

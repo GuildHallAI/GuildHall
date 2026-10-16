@@ -142,7 +142,7 @@ suretyRouter.post("/pool/deposit-instructions", requireAuth, async (request, res
     } | undefined = (await db.query<{
       id: string; user_id: string; wallet_address: string; amount_atomic: string;
       recent_blockhash: string; last_valid_block_height: string; unsigned_transaction: string;
-    }>("SELECT id, user_id, wallet_address, amount_atomic::text, recent_blockhash, last_valid_block_height::text, unsigned_transaction FROM surety_pool_deposits WHERE state = 'awaiting' FOR UPDATE")).rows[0];
+    }>("SELECT id, user_id, wallet_address, amount_atomic::text, recent_blockhash, last_valid_block_height::text, unsigned_transaction FROM surety_pool_deposits WHERE state = 'awaiting' AND user_id = $1 FOR UPDATE", [request.auth!.userId])).rows[0];
     const currentHeight = await connection.getBlockHeight(config.SOLANA_COMMITMENT);
     if (row && currentHeight > Number(row.last_valid_block_height)) {
       // Retire an expired request so it cannot reserve the pool's single

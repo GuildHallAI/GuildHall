@@ -5,12 +5,15 @@ import { migrate } from "../src/db/migrate.js";
 import { markOperationConfirmed, quotePoolWithdrawal } from "../src/surety-pool.js";
 
 const ownerWallet = Keypair.generate().publicKey.toBase58();
+const secondOwnerWallet = Keypair.generate().publicKey.toBase58();
 let userId = "";
+let secondUserId = "";
 let commissionId = "";
 let policyId = "";
 let poolOperationIds: string[] = [];
 let attemptIds: string[] = [];
 let withdrawalIds: string[] = [];
+let depositIds: string[] = [];
 
 beforeAll(async () => {
   await migrate();
@@ -19,6 +22,11 @@ beforeAll(async () => {
     [ownerWallet],
   );
   userId = user.rows[0]!.id;
+  const secondUser = await pool.query<{ id: string }>(
+    "INSERT INTO wallet_users (wallet_address) VALUES ($1) RETURNING id",
+    [secondOwnerWallet],
+  );
+  secondUserId = secondUser.rows[0]!.id;
   const commission = await pool.query<{ id: string }>(
     `INSERT INTO commissions (client_user_id, client_wallet, title, description, asset_mint, amount_atomic, status, deadline_at)
      VALUES ($1, $2, 'Surety integration check', 'Isolated Surety ledger test', $3, 1000000, 'complete', now() + interval '1 day') RETURNING id`,
@@ -48,6 +56,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (depositIds.length) await pool.query("DELETE FROM surety_pool_deposits WHERE id = ANY($1::uuid[])", [depositIds]);
   if (attemptIds.length) await pool.query("DELETE FROM surety_pool_operation_attempts WHERE id = ANY($1::uuid[])", [attemptIds]);
   if (poolOperationIds.length) await pool.query("DELETE FROM surety_pool_operations WHERE id = ANY($1::uuid[])", [poolOperationIds]);
   if (withdrawalIds.length) await pool.query("DELETE FROM surety_withdrawal_requests WHERE id = ANY($1::uuid[])", [withdrawalIds]);
@@ -56,6 +65,7 @@ afterAll(async () => {
   await pool.query("DELETE FROM surety_pool_share_accounts WHERE user_id = $1", [userId]);
   await pool.query("DELETE FROM surety_pool WHERE id = 1");
   if (userId) await pool.query("DELETE FROM wallet_users WHERE id = $1", [userId]);
+  if (secondUserId) await pool.query("DELETE FROM wallet_users WHERE id = $1", [secondUserId]);
 });
 
 async function prepareWithdrawal(amountAtomic: number, sharesAtomic: number) {
@@ -84,6 +94,27 @@ async function prepareWithdrawal(amountAtomic: number, sharesAtomic: number) {
 }
 
 describe("Surety confirmation ledger invariants", () => {
+  it("allows separate underwriters to hold pending deposit instructions concurrently", async () => {
+    const first = await pool.query<{ id: string }>(
+      `INSERT INTO surety_pool_deposits
+         (user_id, wallet_address, amount_atomic, recent_blockhash, last_valid_block_height, unsigned_transaction)
+       VALUES ($1, $2, 100, 'surety-test-blockhash-one', 100, 'unsigned-one') RETURNING id`,
+      [userId, ownerWallet],
+    );
+    const second = await pool.query<{ id: string }>(
+      `INSERT INTO surety_pool_deposits
+         (user_id, wallet_address, amount_atomic, recent_blockhash, last_valid_block_height, unsigned_transaction)
+       VALUES ($1, $2, 200, 'surety-test-blockhash-two', 100, 'unsigned-two') RETURNING id`,
+      [secondUserId, secondOwnerWallet],
+    );
+    depositIds.push(first.rows[0]!.id, second.rows[0]!.id);
+    const pending = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM surety_pool_deposits WHERE state = 'awaiting' AND user_id = ANY($1::uuid[])",
+      [[userId, secondUserId]],
+    );
+    expect(pending.rows[0]!.count).toBe("2");
+  });
+
   it("prices withdrawals only from accounted funds while a deposit awaits confirmation", () => {
     const accountedBalance = 11_000_000_000n;
     const totalShares = 11_000_000_000n;
