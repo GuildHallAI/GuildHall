@@ -63,6 +63,20 @@ type FundingInstructions = {
   unsignedTransaction: string; lastValidBlockHeight: number; termsHash?: string;
 };
 type PendingFunding = { signature: string; blockhash: string; lastValidBlockHeight: number };
+const pendingFundingKey = (commissionId: string) => `guildhall:pending-funding:${commissionId}`;
+
+function readPendingFunding(commissionId: string): PendingFunding | null {
+  try {
+    const raw = localStorage.getItem(pendingFundingKey(commissionId));
+    if (!raw) return null;
+    const pending = JSON.parse(raw) as Partial<PendingFunding>;
+    if (typeof pending.signature !== "string" || typeof pending.blockhash !== "string"
+      || typeof pending.lastValidBlockHeight !== "number") return null;
+    return pending as PendingFunding;
+  } catch {
+    return null;
+  }
+}
 
 const markdownSyntax = /(^\s{0,3}#{1,6}\s)|(^\s*[-*+]\s)|(^\s*\d+\.\s)|(\*\*[^\n]+\*\*)|(__[^\n]+__)|(```|~~~)|(`[^`]+`)|(\[[^\]]+\]\([^)]+\))|(^\s*>\s)|(^\s*\|.+\|\s*$)/m;
 
@@ -139,6 +153,26 @@ function LiveWorkspace() {
     setImagePreviews(urls);
     return () => urls.forEach((url) => URL.revokeObjectURL(url));
   }, [imageFiles]);
+
+  useEffect(() => {
+    if (!session) return;
+    for (const commission of myJobs) {
+      const key = pendingFundingKey(commission.id);
+      if (commission.status !== "open") {
+        localStorage.removeItem(key);
+        continue;
+      }
+      if (commission.clientWallet !== session.walletAddress || pendingFunding?.commissionId === commission.id) continue;
+      const pending = readPendingFunding(commission.id);
+      if (pending) setPendingFunding({ commissionId: commission.id, ...pending });
+    }
+  }, [myJobs, session?.walletAddress, pendingFunding?.commissionId]);
+
+  useEffect(() => {
+    if (!detail) return;
+    const refreshed = myJobs.find((commission) => commission.id === detail.id);
+    if (refreshed && refreshed.updatedAt !== detail.updatedAt) setDetail(refreshed);
+  }, [detail, myJobs]);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -227,18 +261,13 @@ function LiveWorkspace() {
   const latestSubmission = submissions.at(-1);
 
   const recordFunding = async (commission: ApiCommission, pending: PendingFunding) => {
-    const confirmation = await connection.confirmTransaction({
-      signature: pending.signature,
-      blockhash: pending.blockhash,
-      lastValidBlockHeight: pending.lastValidBlockHeight,
-    }, "confirmed");
-    if (confirmation.value.err) throw new Error("The Solana funding transaction failed. The commission is still unfunded.");
-    const result = await guildhallApi<{ data: ApiCommission }>(`/commissions/${commission.id}/funding/confirm`, {
+    const result = await guildhallApi<ApiCommission>(`/commissions/${commission.id}/funding/confirm`, {
       method: "POST",
       body: JSON.stringify({ signature: pending.signature }),
     });
+    localStorage.removeItem(pendingFundingKey(commission.id));
     setPendingFunding(null);
-    setDetail(result.data);
+    setDetail(result);
     toast.success("Escrow funded and confirmed on Solana.");
     await refresh();
   };
@@ -249,6 +278,7 @@ function LiveWorkspace() {
       return;
     }
     setFundingBusy(true);
+    let sentSignature: string | null = null;
     try {
       const instructions = await guildhallApi<FundingInstructions>(`/commissions/${commission.id}/funding-instructions`, { method: "POST", body: JSON.stringify({}) });
       if (instructions.commissionId !== commission.id || instructions.clientWallet !== commission.clientWallet || instructions.assetMint !== commission.assetMint || instructions.amountAtomic !== commission.amountAtomic) {
@@ -261,15 +291,19 @@ function LiveWorkspace() {
       const transaction = Transaction.from(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
       if (!transaction.recentBlockhash) throw new Error("The funding transaction has no recent blockhash. Refresh and try again.");
       const signature = await sendTransaction(transaction, connection);
+      sentSignature = signature;
       const pending = { signature, blockhash: transaction.recentBlockhash, lastValidBlockHeight: instructions.lastValidBlockHeight };
       setPendingFunding({ commissionId: commission.id, ...pending });
+      try { localStorage.setItem(pendingFundingKey(commission.id), JSON.stringify(pending)); } catch { /* Keep the in-memory retry available. */ }
       toast.info(instructions.termsHash
         ? `Transaction sent with terms hash ${instructions.termsHash.slice(0, 10)}…. Waiting for Solana confirmation…`
-        : "Transaction sent. Waiting for Solana confirmation…");
+        : "Transaction sent. GuildHall is checking it on Solana…");
       await recordFunding(commission, pending);
     } catch (cause) {
       console.error("[GuildHall] Commission funding failed:", cause);
-      toast.error((cause as Error).message || "Could not fund this commission.");
+      toast.error(sentSignature
+        ? "Your transaction was sent. GuildHall has not finished verifying it. Do not fund again; use Check transaction confirmation to retry."
+        : (cause as Error).message || "Could not fund this commission.");
     } finally { setFundingBusy(false); }
   };
 
