@@ -55,19 +55,27 @@ agentsRouter.get("/:identifier/record", async (request, response) => {
   const id = agent.rows[0].id;
   const [stats, paidByAsset, records, ratings] = await Promise.all([
     pool.query<{
-      settled_commissions: number; accepted_commissions: number;
+      settled_commissions: number; accepted_commissions: number; total_settled_commissions: number;
+      flagged_commissions: number; excluded_commissions: number;
       distinct_clients: number; lost_appeals: number; rating_count: number; weighted_rating: string | null;
     }>(
-      `SELECT count(*)::int AS settled_commissions,
-              count(*) FILTER (WHERE outcome IN ('accepted', 'tribunal_provider'))::int AS accepted_commissions,
-              count(DISTINCT client_user_id)::int AS distinct_clients,
+      // Integrity flags remove self-dealing and reciprocal work from reputation and halve other flagged work.
+      `SELECT count(*) FILTER (WHERE i.reputation_weight > 0)::int AS settled_commissions,
+              count(*) FILTER (WHERE i.reputation_weight > 0 AND wr.outcome IN ('accepted', 'tribunal_provider'))::int AS accepted_commissions,
+              count(*)::int AS total_settled_commissions,
+              count(*) FILTER (WHERE cardinality(i.flags) > 0)::int AS flagged_commissions,
+              count(*) FILTER (WHERE i.reputation_weight = 0)::int AS excluded_commissions,
+              count(DISTINCT wr.client_user_id) FILTER (WHERE i.reputation_weight > 0)::int AS distinct_clients,
               (SELECT count(DISTINCT c.id)::int FROM commissions c JOIN tribunal_cases tc ON tc.commission_id=c.id
                 WHERE c.provider_agent_id=$1 AND tc.stage='decided' AND tc.appealed_by=c.provider_user_id
                   AND tc.outcome IN ('client', 'split')) AS lost_appeals,
-              (SELECT count(*)::int FROM work_record_feedback f JOIN work_records fw ON fw.id=f.work_record_id WHERE fw.provider_agent_id=$1) AS rating_count,
-              (SELECT (sum(f.rating::numeric * f.weight_atomic) / NULLIF(sum(f.weight_atomic), 0))::text
-                 FROM work_record_feedback f JOIN work_records fw ON fw.id=f.work_record_id WHERE fw.provider_agent_id=$1) AS weighted_rating
-         FROM work_records WHERE provider_agent_id=$1`, [id],
+              (SELECT count(*)::int FROM work_record_feedback f JOIN work_records fw ON fw.id=f.work_record_id
+                 JOIN work_record_integrity_flags fi ON fi.work_record_id=fw.id
+                WHERE fw.provider_agent_id=$1 AND fi.reputation_weight > 0) AS rating_count,
+              (SELECT (sum(f.rating::numeric * f.weight_atomic * fi.reputation_weight) / NULLIF(sum(f.weight_atomic * fi.reputation_weight), 0))::text
+                 FROM work_record_feedback f JOIN work_records fw ON fw.id=f.work_record_id
+                 JOIN work_record_integrity_flags fi ON fi.work_record_id=fw.id WHERE fw.provider_agent_id=$1) AS weighted_rating
+         FROM work_records wr JOIN work_record_integrity_flags i ON i.work_record_id=wr.id WHERE wr.provider_agent_id=$1`, [id],
     ),
     pool.query(
       `SELECT asset_mint AS "assetMint", sum(paid_amount_atomic)::text AS "paidAmountAtomic"
@@ -78,9 +86,11 @@ agentsRouter.get("/:identifier/record", async (request, response) => {
       `SELECT wr.commission_id AS "commissionId", c.title, c.work_category AS category,
               wr.asset_mint AS "assetMint", wr.amount_atomic::text AS "amountAtomic",
               wr.paid_amount_atomic::text AS "paidAmountAtomic", wr.outcome, wr.finalized_at AS "finalizedAt",
-              chain.state AS "chainState", chain.transaction_signature AS "chainSignature"
+              chain.state AS "chainState", chain.transaction_signature AS "chainSignature",
+              integrity.flags AS "integrityFlags", integrity.reputation_weight::float AS "reputationWeight"
          FROM work_records wr JOIN commissions c ON c.id=wr.commission_id
          LEFT JOIN work_record_chain_operations chain ON chain.work_record_id=wr.id
+         JOIN work_record_integrity_flags integrity ON integrity.work_record_id=wr.id
         WHERE wr.provider_agent_id=$1 ORDER BY wr.finalized_at DESC, wr.id DESC`, [id],
     ),
     pool.query(
@@ -102,6 +112,8 @@ agentsRouter.get("/:identifier/record", async (request, response) => {
     record: { settledCommissions: totals.settled_commissions, acceptedCommissions: totals.accepted_commissions,
       acceptanceRate: totals.settled_commissions === 0 ? 0 : totals.accepted_commissions / totals.settled_commissions,
       distinctClients: totals.distinct_clients,
+      totalSettledCommissions: totals.total_settled_commissions, flaggedCommissions: totals.flagged_commissions,
+      excludedCommissions: totals.excluded_commissions,
       lostAppeals: totals.lost_appeals, ratingCount: totals.rating_count,
       weightedRating: totals.weighted_rating === null ? null : Number(totals.weighted_rating) },
     workRecords: records.rows,

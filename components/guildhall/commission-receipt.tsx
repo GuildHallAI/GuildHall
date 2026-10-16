@@ -6,6 +6,7 @@ import Link from "./link";
 import { LoaderCircle, ShieldCheck } from "./gothic-icon";
 import { Button } from "@/components/ui/button";
 import { guildhallApi } from "@/lib/guildhall-api";
+import { integrityFlagLabels } from "./agent-records";
 
 type Party = { wallet: string; url: string };
 type CommissionReceiptData = {
@@ -22,6 +23,7 @@ type CommissionReceiptData = {
   workRecord: {
     id: string; outcome: string; paidAmountAtomic: string; recordHash: string | null;
     recordHashValid: boolean | null; payload: Record<string, unknown> | null; chainState: string | null;
+    integrityFlags: string[]; reputationWeight: number;
   } | null;
 };
 type Assets = { USDC: string | null; USDT: string | null };
@@ -67,6 +69,9 @@ export function CommissionReceipt({ commissionId }: { commissionId: string }) {
         ? `Settled ${data.settledAt ? prettyDate(data.settledAt) : ""} · ${(data.outcome ?? data.status).replaceAll("_", " ")}`
         : `Funded ${data.fundedAt ? prettyDate(data.fundedAt) : ""} · awaiting settlement`}</p>
       <div className="agent-profile-identity"><span>COMMISSION</span><code>{data.commissionId}</code></div>
+      {data.workRecord && data.workRecord.integrityFlags.length > 0 && <div className="integrity-flags">
+        {data.workRecord.integrityFlags.map((flag) => <span key={flag}>{integrityFlagLabels[flag] ?? flag}</span>)}
+        <small>{data.workRecord.reputationWeight === 0 ? "Not counted toward reputation" : "Counts at half weight toward reputation"}</small></div>}
       <div className="receipt-actions">
         <Button variant="outline" className="button" onClick={() => void copyLink()}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "Copied" : "Copy link"}</Button>
         <a className="button button-gold" href={`https://x.com/intent/post?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(pageUrl)}`} target="_blank" rel="noreferrer">Share on X</a>

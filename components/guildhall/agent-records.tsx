@@ -18,6 +18,7 @@ type AgentRecordData = {
     settledCommissions: number; acceptedCommissions: number; acceptanceRate: number;
     distinctClients: number; lostAppeals: number;
     ratingCount: number; weightedRating: number | null;
+    totalSettledCommissions: number; flaggedCommissions: number; excludedCommissions: number;
   };
   paidByAsset: { assetMint: string; paidAmountAtomic: string }[];
   assets: { USDC: string | null; USDT: string | null };
@@ -25,6 +26,7 @@ type AgentRecordData = {
     commissionId: string; title: string; category: string; assetMint: string;
     amountAtomic: string; paidAmountAtomic: string; outcome: string; finalizedAt: string;
     chainState: string | null; chainSignature: string | null;
+    integrityFlags: string[]; reputationWeight: number;
   }[];
   ratings: {
     id: string; rating: number; comment: string; weightAtomic: string;
@@ -34,6 +36,9 @@ type AgentRecordData = {
   cluster: string;
 };
 
+export const integrityFlagLabels: Record<string, string> = {
+  self_dealing: "Self-dealing", reciprocal_pair: "Reciprocal payments", repeat_pair: "Repeat client burst", micro_payment: "Micro payment",
+};
 const compactWallet = (wallet: string) => `${wallet.slice(0, 5)}…${wallet.slice(-4)}`;
 const amount = (atomic: string) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 })
   .format(Number(BigInt(atomic)) / 1_000_000);
@@ -125,7 +130,7 @@ export function AgentWorkRecord({ identifier }: { identifier: string }) {
       <div className="agent-directory-tags">{[...agent.categories, ...agent.capabilities].map((item) => <span key={item}>{item}</span>)}</div>
     </header>
     <section className="agent-record-stats" aria-label="Agent work statistics">
-      <article><span>Settled commissions</span><strong>{stats.settledCommissions}</strong></article>
+      <article><span>Settled commissions</span><strong>{stats.settledCommissions}</strong>{stats.excludedCommissions > 0 && <small>{stats.totalSettledCommissions} total · {stats.excludedCommissions} excluded by integrity checks</small>}</article>
       <article><span>Accepted work</span><strong>{stats.acceptedCommissions}</strong></article>
       <article><span>Acceptance rate</span><strong>{Math.round(stats.acceptanceRate * 100)}%</strong></article>
       <article><span>Paid to owner</span>{data.paidByAsset.length ? data.paidByAsset.map((paid) => <strong key={paid.assetMint}>{amount(paid.paidAmountAtomic)} {assetName(paid.assetMint)}</strong>) : <strong>0</strong>}<small>Settled payouts by asset</small></article>
@@ -133,9 +138,12 @@ export function AgentWorkRecord({ identifier }: { identifier: string }) {
       <article><span>Client rating</span><strong>{stats.weightedRating === null ? "—" : `${stats.weightedRating.toFixed(1)} / 5`}</strong><small>{stats.ratingCount} ratings · {stats.lostAppeals} lost appeals</small></article>
     </section>
     <section className="agent-record-section">
-      <div className="panel-heading"><div><span className="eyebrow">PAID EVIDENCE</span><h2>Work history</h2></div><span className="mono muted">{data.workRecords.length} RECORDS</span></div>
+      <div className="panel-heading"><div><span className="eyebrow">PAID EVIDENCE</span><h2>Work history</h2></div><span className="mono muted">{data.workRecords.length} RECORDS{stats.flaggedCommissions > 0 ? ` · ${stats.flaggedCommissions} FLAGGED` : ""}</span></div>
       {data.workRecords.length ? <div className="agent-work-list">{data.workRecords.map((work) => <article className="agent-work-row" key={work.commissionId}>
-        <div><span className="eyebrow">{work.category} · {work.outcome.replaceAll("_", " ").toUpperCase()}</span><h3>{work.title}</h3><time>{prettyDate(work.finalizedAt)}</time></div>
+        <div><span className="eyebrow">{work.category} · {work.outcome.replaceAll("_", " ").toUpperCase()}</span><h3>{work.title}</h3><time>{prettyDate(work.finalizedAt)}</time>
+          {work.integrityFlags.length > 0 && <div className="integrity-flags" title={work.reputationWeight === 0 ? "Not counted toward reputation" : "Counts at half weight"}>
+            {work.integrityFlags.map((flag) => <span key={flag}>{integrityFlagLabels[flag] ?? flag}</span>)}
+            <small>{work.reputationWeight === 0 ? "Not counted" : "Half weight"}</small></div>}</div>
         <div className="agent-work-payment"><strong>{amount(work.paidAmountAtomic)} {assetName(work.assetMint)}</strong><span>paid · {amount(work.amountAtomic)} {assetName(work.assetMint)} budget</span>
           <Link href={`/receipts/${encodeURIComponent(work.commissionId)}`}>Proof receipt ↗</Link>
           {work.chainSignature && work.chainState === "confirmed" && <a href={`https://solscan.io/tx/${work.chainSignature}${data.cluster === "mainnet-beta" ? "" : `?cluster=${encodeURIComponent(data.cluster)}`}`} target="_blank" rel="noreferrer">Solana receipt ↗</a>}

@@ -84,6 +84,7 @@ body:before{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160
 .agent-work-payment a,.agent-rating-card footer a{font-size:11px;color:#e7c76f}.agent-work-payment a:hover,.agent-rating-card footer a:hover{text-decoration:underline}
 .receipt-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}.receipt-actions .button{display:inline-flex;align-items:center;gap:8px}
 .receipt-signature{display:block;max-width:100%;overflow-wrap:anywhere;color:#e3ddce;font:12px ui-monospace,monospace}
+.integrity-flags{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}.integrity-flags span{padding:3px 8px;border:1px solid #e0705a66;color:#f0a898;font:10px ui-monospace,monospace;letter-spacing:.06em;text-transform:uppercase}.integrity-flags small{font-size:10px;color:#848178}
 .receipt-note{color:#aaa89f;font-size:13px;margin:0 0 12px}
 .receipt-payload{margin-top:14px;padding:16px;border:1px solid #f2c14d2b;background:#0d0d0b;color:#e3ddce;font:12px/1.55 ui-monospace,monospace;overflow-x:auto;white-space:pre}
 .agent-rating-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;border:0}

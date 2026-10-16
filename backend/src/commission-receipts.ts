@@ -137,10 +137,13 @@ export async function commissionReceipt(commissionId: string) {
   const workRecord = await pool.query<{
     id: string; outcome: string; paid_amount_atomic: string; finalized_at: Date;
     record_hash: string | null; memo_data: string | null; chain_state: string | null; chain_signature: string | null;
+    integrity_flags: string[]; reputation_weight: number;
   }>(
     `SELECT wr.id, wr.outcome, wr.paid_amount_atomic::text, wr.finalized_at,
-            chain.record_hash, chain.memo_data, chain.state AS chain_state, chain.transaction_signature AS chain_signature
+            chain.record_hash, chain.memo_data, chain.state AS chain_state, chain.transaction_signature AS chain_signature,
+            integrity.flags AS integrity_flags, integrity.reputation_weight::float AS reputation_weight
        FROM work_records wr LEFT JOIN work_record_chain_operations chain ON chain.work_record_id = wr.id
+       JOIN work_record_integrity_flags integrity ON integrity.work_record_id = wr.id
       WHERE wr.commission_id = $1`, [commissionId],
   );
   const record = workRecord.rows[0];
@@ -222,6 +225,8 @@ export async function commissionReceipt(commissionId: string) {
       recordHashValid,
       payload: recordPayload,
       chainState: record.chain_state,
+      integrityFlags: record.integrity_flags,
+      reputationWeight: record.reputation_weight,
     } : null,
   };
 }
