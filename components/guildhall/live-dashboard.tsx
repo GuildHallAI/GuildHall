@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -21,7 +21,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { WalletSessionControl } from "./wallet-session-control";
 import { AgentManagement } from "./agent-management";
-import { getWalletSession, guildhallApi, type ApiCommission, type WalletSession } from "@/lib/guildhall-api";
+import { getWalletSession, GuildHallApiError, guildhallApi, type ApiCommission, type WalletSession } from "@/lib/guildhall-api";
 
 const navItems = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -159,6 +159,7 @@ function LiveWorkspace() {
   const [activityError, setActivityError] = useState("");
   const [fundingBusy, setFundingBusy] = useState(false);
   const [pendingFunding, setPendingFunding] = useState<{ commissionId: string } & PendingFunding | null>(null);
+  const fundingLock = useRef(false);
   const [takeDownOpen, setTakeDownOpen] = useState(false);
   const [takingDown, setTakingDown] = useState(false);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
@@ -301,10 +302,12 @@ function LiveWorkspace() {
   };
 
   const fundCommission = async (commission: ApiCommission) => {
+    if (fundingLock.current) return;
     if (!session || !publicKey || !walletConnected || publicKey.toBase58() !== commission.clientWallet || session.walletAddress !== commission.clientWallet) {
       toast.error("Connect the same wallet that posted this commission to fund its escrow.");
       return;
     }
+    fundingLock.current = true;
     setFundingBusy(true);
     let sentSignature: string | null = null;
     try {
@@ -338,14 +341,22 @@ function LiveWorkspace() {
       await recordFunding(commission, pending);
     } catch (cause) {
       console.error("[GuildHall] Commission funding failed:", cause);
-      toast.error(sentSignature
-        ? "Your transaction is signed. GuildHall may still be submitting it. Do not sign another funding transaction; use Check transaction confirmation to retry."
-        : (cause as Error).message || "Could not fund this commission.");
-    } finally { setFundingBusy(false); }
+      if (cause instanceof GuildHallApiError && cause.code === "funding_transaction_mismatch") {
+        localStorage.removeItem(pendingFundingKey(commission.id));
+        setPendingFunding(null);
+      }
+      toast.error(cause instanceof GuildHallApiError && cause.code === "funding_transaction_mismatch"
+        ? "The signed transaction was rejected before submission. No funds were moved. Prepare and sign a fresh transaction."
+        : sentSignature
+          ? "Your transaction is signed. GuildHall may still be submitting it. Do not sign another funding transaction; use Check transaction confirmation to retry."
+          : (cause as Error).message || "Could not fund this commission.");
+    } finally { fundingLock.current = false; setFundingBusy(false); }
   };
 
   const confirmPendingFunding = async () => {
     if (!detail || !pendingFunding || pendingFunding.commissionId !== detail.id) return;
+    if (fundingLock.current) return;
+    fundingLock.current = true;
     setFundingBusy(true);
     try {
       if (pendingFunding.signedTransaction) {
@@ -357,8 +368,12 @@ function LiveWorkspace() {
       await recordFunding(detail, pendingFunding);
     } catch (cause) {
       console.error("[GuildHall] Funding confirmation failed:", cause);
+      if (cause instanceof GuildHallApiError && cause.code === "funding_transaction_mismatch") {
+        localStorage.removeItem(pendingFundingKey(detail.id));
+        setPendingFunding(null);
+      }
       toast.error((cause as Error).message || "The funding transaction is not confirmed yet.");
-    } finally { setFundingBusy(false); }
+    } finally { fundingLock.current = false; setFundingBusy(false); }
   };
 
   const takeDownCommission = async () => {

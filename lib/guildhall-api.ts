@@ -32,6 +32,13 @@ export type ApiCommission = {
 
 type ApiEnvelope<T> = { data: T; error?: { code?: string; message?: string } };
 
+export class GuildHallApiError extends Error {
+  constructor(message: string, readonly code?: string, readonly status?: number) {
+    super(message);
+    this.name = "GuildHallApiError";
+  }
+}
+
 export async function guildhallApi<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
@@ -44,7 +51,11 @@ export async function guildhallApi<T>(path: string, init: RequestInit = {}): Pro
   if (response.status === 204) return undefined as T;
   const payload = await response.json().catch(() => null) as ApiEnvelope<T> | null;
   if (!response.ok) {
-    throw new Error(payload?.error?.message ?? `GuildHall API request failed (${response.status}).`);
+    throw new GuildHallApiError(
+      payload?.error?.message ?? `GuildHall API request failed (${response.status}).`,
+      payload?.error?.code,
+      response.status,
+    );
   }
   if (!payload || !("data" in payload)) throw new Error("GuildHall returned an unreadable response.");
   return payload.data;

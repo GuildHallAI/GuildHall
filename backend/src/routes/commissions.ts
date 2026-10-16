@@ -11,7 +11,7 @@ import { ApiError } from "../http.js";
 import { decryptPrivateData } from "../private-data.js";
 import { openTribunalCase } from "../tribunal.js";
 import { evidenceItemSchema, submitCommissionWork } from "../commission-work.js";
-import { claimCommissionForWallet, commissionFundingMessageHash, commissionFundingMessageMatches, createCommissionForWallet, getCommissionFundingInstructions, publicCommission } from "../commission-service.js";
+import { claimCommissionForWallet, commissionFundingMessageMatches, createCommissionForWallet, getCommissionFundingInstructions, publicCommission } from "../commission-service.js";
 import { reviewCommissionSubmission } from "../commission-review.js";
 import { discardStagedCommissionImage, stageCommissionImage } from "../commission-assets.js";
 import { readCommissionImage } from "../cloudinary-assets.js";
@@ -216,12 +216,11 @@ router.post("/:id/funding/submit", requireAuth, async (request, response) => {
   const signatureEntry = transaction.signatures[0];
   if (!signatureEntry.signature) throw new ApiError(422, "invalid_funding_signature", "The signed funding transaction is missing its wallet signature.");
   const signature = bs58.encode(signatureEntry.signature);
-  const messageHash = commissionFundingMessageHash(transaction);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const selected = await client.query<CommissionRow & {
-      client_user_id: string; funding_instructions_message_hash: string | null;
+      client_user_id: string;
       funding_submission_signature: string | null; funding_instructions_last_valid_block_height: string | null;
     }>(
       `SELECT c.*, w.public_key AS escrow_address FROM commissions c
@@ -236,9 +235,12 @@ router.post("/:id/funding/submit", requireAuth, async (request, response) => {
     if (commission.status !== "open" || commission.funding_signature) {
       throw new ApiError(409, "commission_not_fundable", "This commission is no longer awaiting funding.");
     }
-    if (!commission.escrow_address || !commission.funding_instructions_message_hash
-      || messageHash !== commission.funding_instructions_message_hash
-      || !commissionFundingMessageMatches(transaction, commission)) {
+    // Wallet adapters may serialize a transaction differently after signing, and two
+    // near-simultaneous prepare requests can make the DB's most recent blockhash
+    // differ from the transaction the wallet was already signing. Validate the full
+    // expected instruction set below; blockhash validity and the pending signature
+    // lock still prevent expired or duplicate relay attempts.
+    if (!commission.escrow_address || !commissionFundingMessageMatches(transaction, commission)) {
       throw new ApiError(409, "funding_transaction_mismatch", "This signed transaction does not match the latest funding instructions. Refresh and sign the current transaction.");
     }
     if (!transaction.feePayer.equals(new PublicKey(commission.client_wallet))
