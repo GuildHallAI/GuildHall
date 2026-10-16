@@ -7,7 +7,11 @@ import { encryptPrivateData } from "./private-data.js";
 export const evidenceItemSchema = z.object({
   kind: z.enum(["url", "text", "hash", "photo", "timestamp", "location_cell", "checklist"]),
   label: z.string().trim().min(1).max(160),
-  value: z.string().trim().min(1).max(4000),
+  value: z.string().trim().min(1).max(50_000),
+}).superRefine((item, context) => {
+  if (item.kind !== "text" && item.value.length > 4_000) {
+    context.addIssue({ code: "too_big", maximum: 4_000, origin: "string", inclusive: true, path: ["value"], message: "Structured evidence values cannot exceed 4,000 characters." });
+  }
 });
 
 const submissionSchema = z.object({
