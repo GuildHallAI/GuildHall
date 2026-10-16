@@ -134,6 +134,72 @@ function CommissionCard({
   </article>;
 }
 
+function MyCommissionCard({
+  commission, session, asset, onOpen,
+}: {
+  commission: ApiCommission; session: WalletSession; asset: string; onOpen: (item: ApiCommission) => void;
+}) {
+  const isClient = session.walletAddress === commission.clientWallet;
+  const role = isClient ? "You posted this" : "You accepted this";
+  let nextAction = "View commission";
+  let stage = statusLabel[commission.status] ?? commission.status;
+  let context = "Review the latest activity and commission details.";
+  if (commission.status === "open" && isClient) {
+    nextAction = "Fund escrow";
+    stage = "Awaiting your funding";
+    context = "Fund the escrow to make this commission available to providers.";
+  } else if (commission.status === "open") {
+    stage = "Open for a provider";
+    context = "Waiting for a provider to accept this commission.";
+  } else if (commission.status === "funded" && !isClient) {
+    nextAction = "Submit work";
+    stage = "Your delivery is due";
+    context = "Escrow is funded. Submit your work when it is ready for review.";
+  } else if (commission.status === "funded") {
+    stage = "Provider is working";
+    context = "Escrow is funded and the provider is working on the commission.";
+  } else if (commission.status === "submitted" && isClient) {
+    nextAction = "Review submission";
+    stage = "Your review is needed";
+    context = "The provider submitted work. Review it to request changes, accept, or dispute.";
+  } else if (commission.status === "submitted") {
+    stage = "Awaiting client review";
+    context = "Your submission is with the client for review.";
+  } else if (commission.status === "approved") {
+    stage = "Settlement processing";
+    context = "The client accepted the submission and payout is processing.";
+  } else if (commission.status === "disputed") {
+    stage = "Tribunal review";
+    context = "This commission is in Tribunal review.";
+  } else if (commission.status === "complete") {
+    stage = "Completed and paid";
+    context = "The commission is complete and its payout has settled.";
+  } else if (commission.status === "refunded") {
+    stage = "Refunded";
+    context = "Escrow has been returned to the client.";
+  } else if (commission.status === "cancelled" || commission.status === "expired") {
+    context = "This commission is no longer active.";
+  }
+  const counterparty = isClient
+    ? commission.providerAgentName ?? (commission.providerWallet ? shortWallet(commission.providerWallet) : "Waiting for provider")
+    : shortWallet(commission.clientWallet);
+  const updatedAt = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(commission.updatedAt));
+
+  return <article className="live-commission-card dashboard-panel my-commission-card">
+    <header className="live-commission-head">
+      <div><span className="eyebrow">{commission.category} · {commission.workType} · {role}</span><h2>{commission.title}</h2></div>
+      <span className={`status status-${commission.status}`}>{statusLabel[commission.status] ?? commission.status}</span>
+    </header>
+    <div className="live-commission-facts">
+      <div><span>Budget</span><strong>{amount(commission.amountAtomic)} {asset}</strong></div>
+      <div><span>Deadline</span><strong>{date(commission.deadlineAt)}</strong></div>
+      <div><span>{isClient ? "Provider" : "Client"}</span><strong>{counterparty}</strong></div>
+    </div>
+    <div className="my-commission-progress"><div><span className="eyebrow">CURRENT STEP</span><strong>{stage}</strong><p>{context}</p></div><time dateTime={commission.updatedAt}>Updated {updatedAt}</time></div>
+    <footer><Button className={nextAction !== "View commission" ? "button button-gold" : undefined} variant={nextAction !== "View commission" ? undefined : "ghost"} onClick={() => onOpen(commission)}>{nextAction}</Button>{commission.fundingSignature && <Link href={`/receipts/${encodeURIComponent(commission.id)}`} className="button">Proof receipt</Link>}</footer>
+  </article>;
+}
+
 export function LiveDashboard() {
   return <SidebarProvider style={{ "--sidebar-width": "252px" } as React.CSSProperties}><LiveWorkspace /></SidebarProvider>;
 }
@@ -311,6 +377,7 @@ function LiveWorkspace() {
   }, [openJobs, search, categoryFilter, assetFilter, minimumBudget, maximumBudget, deadlineFilter, tribunalFilter, sortOpenJobs, assets.USDT]);
   const filtersActive = search !== "" || categoryFilter !== "all" || assetFilter !== "all" || minimumBudget !== "" || maximumBudget !== "" || deadlineFilter !== "all" || tribunalFilter !== "all" || sortOpenJobs !== "newest";
   const activeMine = myJobs.filter((job) => !["complete", "refunded", "cancelled", "expired"].includes(job.status));
+  const recentMine = useMemo(() => [...myJobs].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()), [myJobs]);
   const needsAttention = myJobs.flatMap((job) => {
     if (!session) return [];
     if (session.walletAddress === job.clientWallet && job.status === "open") return [{ job, action: "Fund escrow" }];
@@ -559,7 +626,7 @@ function LiveWorkspace() {
             <label className="market-filter"><span>Sort by</span><Select value={sortOpenJobs} onValueChange={setSortOpenJobs}><SelectTrigger className="guild-select" aria-label="Sort commissions"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="newest">Newest</SelectItem><SelectItem value="payout">Highest payout</SelectItem><SelectItem value="deadline">Soonest due</SelectItem></SelectContent></Select></label>
             {filtersActive && <Button className="market-clear-filters" variant="ghost" onClick={() => { setSearch(""); setCategoryFilter("all"); setAssetFilter("all"); setMinimumBudget(""); setMaximumBudget(""); setDeadlineFilter("all"); setTribunalFilter("all"); setSortOpenJobs("newest"); }}>Clear filters</Button>}
           </div></div><div className="live-commission-grid">{visibleOpen.map((job) => <CommissionCard key={job.id} commission={job} onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!visibleOpen.length && <p className="live-empty">No matching open commissions.</p>}</div></section>}
-          {tab === "mine" && <section className="dashboard-panel"><div className="panel-heading"><h2>Wallet commission history</h2><span className="mono muted">{myJobs.length} RECORDS</span></div>{!session ? <p className="live-empty">Connect your wallet to see commissions you posted or accepted.</p> : <div className="live-commission-grid">{myJobs.map((job) => <CommissionCard key={job.id} commission={job} own onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!myJobs.length && <p className="live-empty">This wallet has no commissions yet.</p>}</div>}</section>}
+          {tab === "mine" && <><div className="metric-grid three my-commission-metrics"><div className="metric-card"><Clock /><span>Active commissions</span><strong>{activeMine.length}</strong><small>Work still moving through the process</small></div><div className="metric-card"><ShieldCheck /><span>Needs your action</span><strong>{needsAttention.length}</strong><small>Funding, delivery, or review</small></div><div className="metric-card"><ScrollText /><span>Completed</span><strong>{myJobs.filter((job) => job.status === "complete").length}</strong><small>Commission history for this wallet</small></div></div><section className="dashboard-panel"><div className="panel-heading"><div><h2>Your commissions</h2><p className="my-commission-intro">Follow each commission’s current step, latest update, and what to do next.</p></div><span className="mono muted">{myJobs.length} RECORDS</span></div>{!session ? <p className="live-empty">Connect your wallet to see commissions you posted or accepted.</p> : <div className="live-commission-grid">{recentMine.map((job) => <MyCommissionCard key={job.id} commission={job} session={session} asset={assetName(job)} onOpen={openCommission} />)}{!myJobs.length && <p className="live-empty">This wallet has no commissions yet.</p>}</div>}</section></>}
           {tab === "agents" && <AgentManagement session={session} />}
         </>}
       </main>

@@ -175,3 +175,12 @@ body:has(.guild-preloader[data-phase="loading"]) .hero-wordmark,body:has(.guild-
 @media(max-width:600px){.follow-hero-caption{bottom:145px}.follow-hero-caption .token-address{margin-top:8px;max-width:86vw}.follow-hero-caption .token-address code{font-size:9px}.follow-footer .token-address{grid-column:1/-1}.site-footer .token-address-compact{max-width:100%;}}
 .dex-link{color:#f6c544!important}.dex-short{display:none}.dex-link:hover{color:#fff!important}.dex-link:before{background:#f6c544}.follow-header-actions .dex-link{padding:5px 0}
 @media(max-width:700px){.follow-header-actions>.dex-link{display:inline-flex!important;align-items:center;font-size:12px!important}.dex-full{display:none}.dex-short{display:inline}}
+.my-commission-metrics{margin-bottom:20px}
+.my-commission-intro{margin:6px 0 0;color:#999;font-size:12px;line-height:1.5}
+.my-commission-progress{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;padding:15px 0;border-top:1px solid #fff2;border-bottom:1px solid #fff2}
+.my-commission-progress>div{display:grid;gap:5px;min-width:0}
+.my-commission-progress .eyebrow{font-size:9px;color:#9f9b91}
+.my-commission-progress strong{font:20px/1.1 'Pirata One',serif;color:#f0e8d6}
+.my-commission-progress p{margin:0;color:#aaa;font-size:11px;line-height:1.5}
+.my-commission-progress time{flex:none;color:#888;font:10px/1.4 ui-monospace,monospace;text-align:right}
+@media(max-width:600px){.my-commission-progress{align-items:flex-start;flex-direction:column;gap:9px}.my-commission-progress time{text-align:left}.my-commission-metrics .metric-card>small{font-size:9px}}
