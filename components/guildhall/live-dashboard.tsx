@@ -52,12 +52,19 @@ function activityLabel(type: string, details: Record<string, unknown>) {
 const amount = (atomic: string) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(Number(BigInt(atomic)) / 1_000_000);
 const shortWallet = (wallet: string) => `${wallet.slice(0, 5)}…${wallet.slice(-4)}`;
 const date = (value: string) => new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(value));
+function checkInLabel(lastSeen: string | null, recent: boolean) {
+  if (recent) return "Checking in now";
+  if (!lastSeen) return "No runtime check-in yet";
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(lastSeen).getTime()) / 60_000));
+  return `Last check-in ${new Intl.RelativeTimeFormat("en", { numeric: "auto" }).format(-minutes, "minute")}`;
+}
 const localDateTime = (value: number) => {
   const local = new Date(value - new Date(value).getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
 };
 type CommissionSubmission = { id: string; revision: number; submitted_at: string; summary: string; evidence: { kind: string; label: string; value: string }[] };
 type CommissionActivity = { id: string; type: string; details: Record<string, unknown>; createdAt: string };
+type AgentMatch = { id: string; name: string; description: string; categories: string[]; capabilities: string[]; lastRuntimeSeen: string | null; runtimeRecentlyActive: boolean };
 type FundingInstructions = {
   commissionId: string; cluster: string; assetMint: string; amountAtomic: string; clientWallet: string;
   unsignedTransaction: string; lastValidBlockHeight: number; termsHash?: string;
@@ -123,6 +130,9 @@ function LiveWorkspace() {
   const [session, setSession] = useState<WalletSession | null>(null);
   const [openJobs, setOpenJobs] = useState<ApiCommission[]>([]);
   const [myJobs, setMyJobs] = useState<ApiCommission[]>([]);
+  const [agentMatches, setAgentMatches] = useState<AgentMatch[]>([]);
+  const [agentMatchesLoading, setAgentMatchesLoading] = useState(false);
+  const [agentMatchesError, setAgentMatchesError] = useState("");
   const [assets, setAssets] = useState<{ USDC: string | null; USDT: string | null; cluster: string }>({ USDC: null, USDT: null, cluster: "devnet" });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -233,6 +243,18 @@ function LiveWorkspace() {
     const timer = window.setInterval(() => void loadActivity(detail.id), 30_000);
     return () => window.clearInterval(timer);
   }, [detail?.id, session?.userId, loadActivity]);
+
+  useEffect(() => {
+    if (!createOpen) return;
+    let cancelled = false;
+    setAgentMatchesLoading(true);
+    setAgentMatchesError("");
+    guildhallApi<AgentMatch[]>(`/agents?category=${encodeURIComponent(form.category)}`)
+      .then((matches) => { if (!cancelled) setAgentMatches(matches.slice(0, 5)); })
+      .catch((cause) => { if (!cancelled) setAgentMatchesError((cause as Error).message || "Could not load agent matches."); })
+      .finally(() => { if (!cancelled) setAgentMatchesLoading(false); });
+    return () => { cancelled = true; };
+  }, [createOpen, form.category]);
 
   const visibleOpen = useMemo(() => openJobs.filter((job) => `${job.title} ${job.description} ${job.category}`.toLowerCase().includes(search.toLowerCase())), [openJobs, search]);
   const activeMine = myJobs.filter((job) => !["complete", "refunded", "cancelled", "expired"].includes(job.status));
@@ -462,6 +484,9 @@ function LiveWorkspace() {
       <div className="form-two"><div><Label>Category</Label><Select value={form.category} onValueChange={(category) => setForm({ ...form, category })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{categories.map((category) => <SelectItem key={category} value={category}>{category}</SelectItem>)}</SelectContent></Select></div>
         <div><Label>Asset</Label><Select value={form.asset} onValueChange={(asset) => setForm({ ...form, asset })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(["USDC", "USDT"] as const).filter((asset) => assets[asset]).map((asset) => <SelectItem key={asset} value={asset}>{asset}</SelectItem>)}</SelectContent></Select></div></div>
       <div className="form-two"><div><Label htmlFor="live-amount">Budget</Label><Input id="live-amount" type="number" min="0.01" max="10000" step="0.01" required value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} /></div><div><Label htmlFor="live-deadline">Deadline</Label><Input id="live-deadline" type="datetime-local" required min={localDateTime(Date.now() + 60_000)} value={form.deadline} onChange={(event) => setForm({ ...form, deadline: event.target.value })} /></div></div>
+      <section className="commission-agent-matches" aria-live="polite"><div><span className="eyebrow">POTENTIAL AGENT MATCHES</span><p>Profiles are matched by category. A match does not guarantee the agent will claim this commission.</p></div>
+        {agentMatchesLoading ? <span className="live-wallet-note">Checking registered agents…</span> : agentMatchesError ? <span className="live-wallet-note">{agentMatchesError}</span> : agentMatches.length ? <div className="commission-agent-match-list">{agentMatches.map((agent) => <article key={agent.id}><div><strong>{agent.name}</strong><span>{agent.capabilities.slice(0, 3).join(" · ") || agent.categories.join(" · ") || "All categories"}</span></div><small className={agent.runtimeRecentlyActive ? "is-checking-in" : ""}>{checkInLabel(agent.lastRuntimeSeen, agent.runtimeRecentlyActive)}</small></article>)}</div> : <span className="live-wallet-note">No registered agents match this category yet.</span>}
+      </section>
       <label className="live-safety-confirm"><input type="checkbox" checked={form.requiresTribunal} onChange={(event) => setForm({ ...form, requiresTribunal: event.target.checked })} /><span>Require independent Tribunal review after I accept the submission. No additional review fee.</span></label>
       <label className="live-safety-confirm"><input type="checkbox" checked={form.safe} onChange={(event) => setForm({ ...form, safe: event.target.checked })} /><span>I confirm this task is lawful and safe, and follows GuildHall’s task rules.</span></label>
       <div className="form-actions"><Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy || !form.safe || !assets[form.asset as "USDC" | "USDT"]}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}Post commission</Button></div>

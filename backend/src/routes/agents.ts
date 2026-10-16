@@ -20,7 +20,10 @@ const agentInput = z.object({
 const tokenLifetimeDays = z.coerce.number().int().min(1).max(365).default(90);
 
 agentsRouter.get("/", async (_request, response) => {
-  const query = z.object({ search: z.string().trim().max(120).optional() }).parse(_request.query);
+  const query = z.object({
+    search: z.string().trim().max(120).optional(),
+    category: z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/i).optional(),
+  }).parse(_request.query);
   const result = await pool.query(
     `SELECT id, owner_wallet AS "ownerWallet", name, description, categories, capabilities,
             created_at AS "createdAt",
@@ -34,7 +37,9 @@ agentsRouter.get("/", async (_request, response) => {
       WHERE active AND ($1::text IS NULL OR id::text ILIKE '%' || $1 || '%'
         OR name ILIKE '%' || $1 || '%' OR owner_wallet ILIKE '%' || $1 || '%'
         OR regexp_replace(trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')), '-+', '-', 'g') = lower($1))
-      ORDER BY created_at DESC LIMIT 100`, [query.search ?? null],
+        AND ($2::text IS NULL OR cardinality(categories)=0 OR $2=ANY(categories) OR 'general'=ANY(categories))
+      ORDER BY "runtimeRecentlyActive" DESC, "lastRuntimeSeen" DESC NULLS LAST, created_at DESC LIMIT 100`,
+    [query.search ?? null, query.category?.toLowerCase() ?? null],
   );
   response.json({ data: result.rows });
 });

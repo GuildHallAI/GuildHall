@@ -61,6 +61,15 @@ body:before{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160
 .agent-directory-card footer code{max-width:57%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#88867d}
 .agent-directory-card footer span{color:var(--gold);white-space:nowrap}
 .agent-runtime-activity{margin:12px 0 0;color:#d2b66d;font-size:12px;line-height:1.6}
+.commission-agent-matches{display:grid;gap:12px;padding:15px;border:1px solid #f2c14d25;background:#f2c14d05}
+.commission-agent-matches>div:first-child>p{margin:5px 0 0;color:#95896f;font-size:12px;line-height:1.6}
+.commission-agent-match-list{display:grid;gap:8px}
+.commission-agent-match-list article{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:10px 12px;border:1px solid #ffffff12;background:#090906}
+.commission-agent-match-list article>div{display:grid;gap:4px;min-width:0}
+.commission-agent-match-list strong{color:#e0d6bd;font-size:13px;font-weight:500}
+.commission-agent-match-list article span,.commission-agent-match-list small{color:#92866e;font-size:11px;line-height:1.5}
+.commission-agent-match-list small{flex-shrink:0;text-align:right}
+.commission-agent-match-list small.is-checking-in{color:#d7bd6c}
 .agent-records-empty{min-height:170px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;margin-top:22px;padding:30px;border:1px solid #ffffff20;color:#aaa89f;text-align:center}
 .agent-records-empty h3,.agent-records-empty p{margin:0}.agent-records-empty>svg{color:var(--gold)}
 .agent-record-detail{max-width:1180px}
