@@ -82,6 +82,11 @@ export function suretyPremiumRate(overturnRatePercent: number | null) {
   return Math.min(config.SURETY_MAX_PREMIUM_BPS, config.SURETY_BASE_PREMIUM_BPS + risk);
 }
 
+export function quotePoolWithdrawal(sharesToWithdraw: bigint, accountedBalance: bigint, totalShares: bigint) {
+  if (sharesToWithdraw <= 0n || accountedBalance <= 0n || totalShares <= 0n || sharesToWithdraw > totalShares) return 0n;
+  return accountedBalance * sharesToWithdraw / totalShares;
+}
+
 export async function reconcileSuretyPolicies(limit = 50) {
   const db = await pool.connect();
   try {
@@ -238,7 +243,6 @@ async function prepareNextWithdrawal(db: PoolClient) {
   if (!request) return false;
   const poolRow = await db.query<SuretyPool>("SELECT * FROM surety_pool WHERE id = 1 FOR UPDATE");
   if (!poolRow.rows[0]) return false;
-  const tokenBalance = await suretyPoolBalance(poolRow.rows[0]);
   const shares = await db.query<{ total: string; own: string }>(
     `SELECT COALESCE(sum(shares_atomic), 0)::text AS total,
             COALESCE((SELECT shares_atomic FROM surety_pool_share_accounts WHERE user_id = $1), 0)::text AS own
@@ -248,7 +252,10 @@ async function prepareNextWithdrawal(db: PoolClient) {
   const ownShares = BigInt(shares.rows[0].own);
   const requestShares = BigInt(request.shares_atomic);
   if (requestShares > ownShares || totalShares <= 0n) throw new Error("Queued Surety withdrawal no longer has enough shares.");
-  const amount = tokenBalance * requestShares / totalShares;
+  // Only confirmed, ledger-accounted funds belong in the withdrawal price.
+  // The on-chain balance can include a deposit that landed but is not yet
+  // credited with shares, which would let an existing withdrawer take it.
+  const amount = quotePoolWithdrawal(requestShares, BigInt(poolRow.rows[0].accounted_balance_atomic), totalShares);
   if (amount === 0n) {
     await db.query("UPDATE surety_pool_share_accounts SET shares_atomic = shares_atomic - $2::numeric, updated_at = now() WHERE user_id = $1", [request.user_id, request.shares_atomic]);
     await db.query("UPDATE surety_withdrawal_requests SET state = 'wiped', updated_at = now() WHERE id = $1", [request.id]);

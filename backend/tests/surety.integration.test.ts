@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Keypair } from "@solana/web3.js";
 import { pool } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
-import { markOperationConfirmed } from "../src/surety-pool.js";
+import { markOperationConfirmed, quotePoolWithdrawal } from "../src/surety-pool.js";
 
 const ownerWallet = Keypair.generate().publicKey.toBase58();
 let userId = "";
@@ -84,6 +84,16 @@ async function prepareWithdrawal(amountAtomic: number, sharesAtomic: number) {
 }
 
 describe("Surety confirmation ledger invariants", () => {
+  it("prices withdrawals only from accounted funds while a deposit awaits confirmation", () => {
+    const accountedBalance = 11_000_000_000n;
+    const totalShares = 11_000_000_000n;
+    const withdrawerShares = 1_000_000_000n;
+    const landedButUnconfirmedDeposit = 10_000_000_000n;
+
+    expect(quotePoolWithdrawal(withdrawerShares, accountedBalance, totalShares)).toBe(1_000_000_000n);
+    expect((accountedBalance + landedButUnconfirmedDeposit) * withdrawerShares / totalShares).toBe(1_909_090_909n);
+  });
+
   it("atomically confirms a claim and debits the accounted balance exactly once", async () => {
     const signature = `claim-${crypto.randomUUID()}`;
     const operation = await pool.query<{ id: string }>(
