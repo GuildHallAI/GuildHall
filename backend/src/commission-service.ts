@@ -60,6 +60,7 @@ type CommissionRow = {
 };
 
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
+const LIGHTHOUSE_ASSERTION_PROGRAM_ID = new PublicKey("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95");
 
 function buildCommissionFundingTransaction(commission: CommissionRow, blockhash: string) {
   const escrow = new PublicKey(commission.escrow_address!);
@@ -86,24 +87,43 @@ export function commissionFundingMessageMatches(transaction: Transaction, commis
   if (!commission.escrow_address || !transaction.recentBlockhash || !transaction.feePayer) return false;
   const computeBudgetTags = new Set<number>();
   const fundingInstructions = [];
+  const clientWallet = new PublicKey(commission.client_wallet);
+  const sourceTokenAccount = getAssociatedTokenAddressSync(new PublicKey(commission.asset_mint), clientWallet);
+  const destinationTokenAccount = getAssociatedTokenAddressSync(new PublicKey(commission.asset_mint), new PublicKey(commission.escrow_address));
+  const allowedLighthouseAccounts = new Set([
+    clientWallet.toBase58(), sourceTokenAccount.toBase58(), destinationTokenAccount.toBase58(),
+  ]);
+  let extraInstructionsStarted = false;
   for (const instruction of transaction.instructions) {
-    if (!instruction.programId.equals(ComputeBudgetProgram.programId)) {
+    if (instruction.programId.equals(ComputeBudgetProgram.programId)) {
+      extraInstructionsStarted = true;
+      const data = Buffer.from(instruction.data);
+      const tag = data[0];
+      if (tag === 2 && data.length === 5) {
+        const units = data.readUInt32LE(1);
+        if (units < 1 || units > 1_400_000 || computeBudgetTags.has(tag)) return false;
+      } else if (tag === 3 && data.length === 9) {
+        const microLamports = data.readBigUInt64LE(1);
+        // Cap wallet-added priority fees at 0.00014 SOL for the max CU limit.
+        if (microLamports > 100_000n || computeBudgetTags.has(tag)) return false;
+      } else {
+        return false;
+      }
+      computeBudgetTags.add(tag);
+      continue;
+    }
+    if (instruction.programId.equals(LIGHTHOUSE_ASSERTION_PROGRAM_ID)) {
+      extraInstructionsStarted = true;
+      const tag = instruction.data[0];
+      if (tag !== 6 && tag !== 10) return false;
+      if (instruction.keys.some(({ pubkey }) => !allowedLighthouseAccounts.has(pubkey.toBase58()))) return false;
+      continue;
+    }
+    if (!extraInstructionsStarted) {
       fundingInstructions.push(instruction);
       continue;
     }
-    const data = Buffer.from(instruction.data);
-    const tag = data[0];
-    if (tag === 2 && data.length === 5) {
-      const units = data.readUInt32LE(1);
-      if (units < 1 || units > 1_400_000 || computeBudgetTags.has(tag)) return false;
-    } else if (tag === 3 && data.length === 9) {
-      const microLamports = data.readBigUInt64LE(1);
-      // Cap wallet-added priority fees at 0.00014 SOL for the max CU limit.
-      if (microLamports > 100_000n || computeBudgetTags.has(tag)) return false;
-    } else {
-      return false;
-    }
-    computeBudgetTags.add(tag);
+    return false;
   }
   const normalized = new Transaction({ feePayer: transaction.feePayer, recentBlockhash: transaction.recentBlockhash })
     .add(...fundingInstructions);
