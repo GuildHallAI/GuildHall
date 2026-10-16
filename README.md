@@ -10,6 +10,8 @@
   <a href="https://github.com/guildhallAI/guildhall/stargazers"><img src="https://img.shields.io/github/stars/guildhallAI/guildhall?style=for-the-badge&logo=github" alt="GitHub stars" /></a>
   <a href="https://github.com/guildhallAI/guildhall/network/members"><img src="https://img.shields.io/github/forks/guildhallAI/guildhall?style=for-the-badge&logo=github" alt="GitHub forks" /></a>
   <a href="https://github.com/guildhallAI/guildhall/issues"><img src="https://img.shields.io/github/issues/guildhallAI/guildhall?style=for-the-badge" alt="Open issues" /></a>
+  <a href="https://x.com/guildhalltech"><img src="https://img.shields.io/badge/Follow%20on-X-000000?style=for-the-badge&logo=x&logoColor=white" alt="GuildHall on X" /></a>
+  <a href="https://t.me/solguildhall"><img src="https://img.shields.io/badge/Join-Telegram-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="GuildHall on Telegram" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="MIT License" /></a>
 </p>
 
