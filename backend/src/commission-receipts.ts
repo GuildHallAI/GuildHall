@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import { pool } from "./db/index.js";
 import { ApiError } from "./http.js";
 import { loadSolanaFeePayer } from "./solana-fee-payer.js";
+import { commissionTermsDocument, commissionTermsHash, termsMemoText } from "./commission-terms.js";
 
 type ReceiptRole =
   | "provider" | "crew_member" | "charter_buyback" | "client"
@@ -61,6 +62,37 @@ function gasPayerAddress() {
   if (config.GUILDHALL_GAS_WALLET_PUBLIC_KEY) return config.GUILDHALL_GAS_WALLET_PUBLIC_KEY;
   try { return loadSolanaFeePayer().publicKey.toBase58(); }
   catch { return null; }
+}
+
+/** Canonical commission terms, their live hash, and the hash frozen when the client funded the escrow. */
+export async function commissionTermsRecord(commissionId: string) {
+  const result = await pool.query<{
+    id: string; client_wallet: string; title: string; description: string; asset_mint: string; amount_atomic: string;
+    work_category: string | null; sla_hours: number | null; requires_tribunal: boolean; deadline_at: Date;
+    funding_signature: string | null; terms_hash: string | null; terms_hashed_at: Date | null; terms_anchored: boolean;
+    cluster: string | null;
+  }>(
+    `SELECT c.id, c.client_wallet, c.title, c.description, c.asset_mint, c.amount_atomic::text, c.work_category,
+            c.sla_hours, c.requires_tribunal, c.deadline_at, c.funding_signature, c.terms_hash, c.terms_hashed_at,
+            c.terms_anchored, w.cluster
+       FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id WHERE c.id = $1`, [commissionId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new ApiError(404, "commission_not_found", "Commission not found.");
+  const currentHash = commissionTermsHash(row);
+  return {
+    document: commissionTermsDocument(row),
+    algorithm: "sha256(JSON.stringify(document))",
+    currentHash,
+    frozenHash: row.terms_hash,
+    frozenAt: row.terms_hashed_at,
+    matchesFrozen: row.terms_hash ? row.terms_hash === currentHash : null,
+    anchoredOnChain: row.terms_anchored,
+    memo: row.terms_hash ? termsMemoText(row.terms_hash) : null,
+    fundingTransaction: row.funding_signature
+      ? { signature: row.funding_signature, url: explorerTransactionUrl(row.funding_signature, row.cluster ?? config.SOLANA_CLUSTER) }
+      : null,
+  };
 }
 
 /** Public proof receipt: every Solana transaction that moved or recorded this commission's funds. */
@@ -147,6 +179,7 @@ export async function commissionReceipt(commissionId: string) {
     } catch { recordHashValid = false; }
   }
 
+  const terms = await commissionTermsRecord(commissionId);
   return {
     commissionId: row.id,
     title: row.title,
@@ -174,6 +207,13 @@ export async function commissionReceipt(commissionId: string) {
       ? settlementLines(parent.operation, row.amount_atomic, parent.distribution, { provider: row.provider_wallet, client: row.client_wallet })
       : [],
     transactions,
+    terms: {
+      hash: terms.frozenHash ?? terms.currentHash,
+      frozenAtFunding: terms.frozenHash !== null,
+      matchesFrozen: terms.matchesFrozen,
+      anchoredOnChain: terms.anchoredOnChain,
+      memo: terms.memo,
+    },
     workRecord: record ? {
       id: record.id,
       outcome: record.outcome,

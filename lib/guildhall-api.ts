@@ -24,6 +24,8 @@ export type ApiCommission = {
   fundingSignature: string | null;
   fundedAt: string | null;
   escrowAddress?: string;
+  termsHash?: string | null;
+  termsAnchored?: boolean;
   createdAt: string;
   updatedAt: string;
 };

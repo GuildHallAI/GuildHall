@@ -12,6 +12,7 @@ import { pool } from "./db/index.js";
 import { createCommissionEscrowWallet } from "./escrow-wallets.js";
 import { ApiError } from "./http.js";
 import { assertSafeTaskText, taskSafetyAttestation } from "./task-policy.js";
+import { commissionTermsHash, termsMemoInstruction } from "./commission-terms.js";
 
 const amountInput = z.string().regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,6})?$/, "Use a positive decimal amount with at most 6 decimal places.");
 export const commissionCreateInputSchema = z.object({
@@ -50,6 +51,9 @@ type CommissionRow = {
   created_at: Date;
   updated_at: Date;
   escrow_address?: string;
+  terms_hash?: string | null;
+  terms_hashed_at?: Date | null;
+  terms_anchored?: boolean;
 };
 
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
@@ -75,6 +79,8 @@ export function publicCommission(row: CommissionRow) {
     fundingSignature: row.funding_signature,
     fundedAt: row.funded_at,
     escrowAddress: row.escrow_address,
+    termsHash: row.terms_hash ?? null,
+    termsAnchored: row.terms_anchored ?? false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -233,11 +239,13 @@ export async function getCommissionFundingInstructions(commissionId: string, use
   const clientWallet = new PublicKey(commission.client_wallet);
   const sourceTokenAccount = getAssociatedTokenAddressSync(mint, clientWallet);
   const tokenAccount = getAssociatedTokenAddressSync(mint, escrow);
+  const termsHash = commissionTermsHash(commission);
   const transaction = new Transaction({ feePayer: clientWallet, recentBlockhash: latestBlockhash.blockhash }).add(
     createAssociatedTokenAccountIdempotentInstruction(clientWallet, sourceTokenAccount, clientWallet, mint),
     createAssociatedTokenAccountIdempotentInstruction(clientWallet, tokenAccount, escrow, mint),
     createTransferCheckedInstruction(sourceTokenAccount, mint, tokenAccount, clientWallet,
       BigInt(commission.amount_atomic), 6, [], TOKEN_PROGRAM_ID),
+    termsMemoInstruction(termsHash, clientWallet),
   );
   const client = await pool.connect();
   try {
@@ -259,7 +267,7 @@ export async function getCommissionFundingInstructions(commissionId: string, use
     return { commissionId, cluster: config.SOLANA_CLUSTER, assetMint: commission.asset_mint,
       sourceTokenAccount: sourceTokenAccount.toBase58(), tokenAccount: tokenAccount.toBase58(),
       escrowOwner: escrow.toBase58(), amountAtomic: commission.amount_atomic, decimals: 6,
-      clientWallet: commission.client_wallet,
+      clientWallet: commission.client_wallet, termsHash,
       unsignedTransaction: transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"),
       lastValidBlockHeight: latestBlockhash.lastValidBlockHeight };
   } catch (error) {

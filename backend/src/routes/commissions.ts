@@ -15,7 +15,8 @@ import { claimCommissionForWallet, createCommissionForWallet, getCommissionFundi
 import { reviewCommissionSubmission } from "../commission-review.js";
 import { discardStagedCommissionImage, stageCommissionImage } from "../commission-assets.js";
 import { readCommissionImage } from "../cloudinary-assets.js";
-import { commissionReceipt } from "../commission-receipts.js";
+import { commissionReceipt, commissionTermsRecord } from "../commission-receipts.js";
+import { commissionTermsHash, transactionAnchorsTerms } from "../commission-terms.js";
 
 const router = Router();
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
@@ -186,6 +187,10 @@ router.get("/:id/receipt", async (request, response) => {
   response.json({ data: await commissionReceipt(uuidSchema.parse(request.params.id)) });
 });
 
+router.get("/:id/terms", async (request, response) => {
+  response.json({ data: await commissionTermsRecord(uuidSchema.parse(request.params.id)) });
+});
+
 router.post("/:id/funding-instructions", requireAuth, async (request, response) => {
   const id = uuidSchema.parse(request.params.id);
   response.json({ data: await getCommissionFundingInstructions(id, request.auth!.userId) });
@@ -292,10 +297,13 @@ router.post("/:id/funding/confirm", async (request, response) => {
        VALUES ($1, $2, 'fund', 'spl', $3, $4, $5, 'confirmed', $2)`,
       [id, `fund:${signature}`, mint.toBase58(), initial.amount_atomic, tokenAccount],
     );
+    const termsHash = commissionTermsHash(commission);
+    const termsAnchored = transactionAnchorsTerms(parsed.transaction.message.instructions, termsHash);
     const updated = await client.query<CommissionRow>(
       `UPDATE commissions SET status = 'funded', funding_signature = $2,
-         funded_at = now(), updated_at = now() WHERE id = $1 RETURNING *`,
-      [id, signature],
+         funded_at = now(), terms_hash = $3, terms_hashed_at = now(), terms_anchored = $4,
+         updated_at = now() WHERE id = $1 RETURNING *`,
+      [id, signature, termsHash, termsAnchored],
     );
     await client.query("COMMIT");
     response.json({ data: publicCommission({ ...updated.rows[0], escrow_address: initial.escrow_address }), idempotentReplay: false });

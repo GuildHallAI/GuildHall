@@ -18,6 +18,7 @@ type CommissionReceiptData = {
   };
   distribution: { role: string; wallet: string | null; amountAtomic: string; shareOfFeeBps?: number }[];
   transactions: { kind: string; signature: string; url: string; label: string }[];
+  terms: { hash: string; frozenAtFunding: boolean; matchesFrozen: boolean | null; anchoredOnChain: boolean; memo: string | null };
   workRecord: {
     id: string; outcome: string; paidAmountAtomic: string; recordHash: string | null;
     recordHashValid: boolean | null; payload: Record<string, unknown> | null; chainState: string | null;
@@ -104,6 +105,18 @@ export function CommissionReceipt({ commissionId }: { commissionId: string }) {
         <div><span className="eyebrow">{label}</span><code className="receipt-signature">{party.wallet}</code></div>
         <div className="agent-work-payment"><a href={party.url} target="_blank" rel="noreferrer">Account ↗</a></div>
       </article>)}</div>
+    </section>
+
+    <section className="agent-record-section">
+      <div className="panel-heading"><div><span className="eyebrow">AGREED BEFORE THE WORK</span><h2>Terms hash</h2></div>
+        <span className="mono muted">{data.terms.matchesFrozen === false ? "TERMS CHANGED AFTER FUNDING"
+          : data.terms.anchoredOnChain ? <><ShieldCheck size={14} /> SIGNED IN FUNDING TX</>
+            : data.terms.frozenAtFunding ? "FROZEN AT FUNDING" : "COMPUTED FROM CURRENT TERMS"}</span></div>
+      <p className="receipt-note">{data.terms.anchoredOnChain
+        ? <>The client signed this hash into the funding transaction as a Memo (<code>{data.terms.memo}</code>), so the brief, budget, and deadline cannot be changed later without the hash breaking.</>
+        : <>SHA-256 of the canonical terms: title, brief, asset, amount, category, SLA, Tribunal setting, and deadline.</>}{" "}
+        <a href={`/api/backend/v1/commissions/${encodeURIComponent(data.commissionId)}/terms`} target="_blank" rel="noreferrer">Recompute it yourself ↗</a></p>
+      <code className="receipt-signature">{data.terms.hash}</code>
     </section>
 
     {data.workRecord?.recordHash && <section className="agent-record-section">

@@ -60,7 +60,7 @@ type CommissionSubmission = { id: string; revision: number; submitted_at: string
 type CommissionActivity = { id: string; type: string; details: Record<string, unknown>; createdAt: string };
 type FundingInstructions = {
   commissionId: string; cluster: string; assetMint: string; amountAtomic: string; clientWallet: string;
-  unsignedTransaction: string; lastValidBlockHeight: number;
+  unsignedTransaction: string; lastValidBlockHeight: number; termsHash?: string;
 };
 type PendingFunding = { signature: string; blockhash: string; lastValidBlockHeight: number };
 
@@ -263,7 +263,9 @@ function LiveWorkspace() {
       const signature = await sendTransaction(transaction, connection);
       const pending = { signature, blockhash: transaction.recentBlockhash, lastValidBlockHeight: instructions.lastValidBlockHeight };
       setPendingFunding({ commissionId: commission.id, ...pending });
-      toast.info("Transaction sent. Waiting for Solana confirmation…");
+      toast.info(instructions.termsHash
+        ? `Transaction sent with terms hash ${instructions.termsHash.slice(0, 10)}…. Waiting for Solana confirmation…`
+        : "Transaction sent. Waiting for Solana confirmation…");
       await recordFunding(commission, pending);
     } catch (cause) {
       console.error("[GuildHall] Commission funding failed:", cause);
