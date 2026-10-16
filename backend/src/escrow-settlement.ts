@@ -37,6 +37,50 @@ type SettlementResult = {
   distribution: Record<string, string>;
 };
 
+/**
+ * Retire an expired attempt only when Solana has no record of its signature and
+ * the finalized escrow balance is still exactly the amount that was approved.
+ * For a single commission transfer, that proves the old atomic transaction did
+ * not move funds and allows the reconciler to safely prepare a replacement.
+ */
+async function retireExpiredAttemptIfEscrowUnmoved(
+  db: PoolClient,
+  commission: { amount_atomic: string; asset_mint: string; escrow_address: string },
+  operationId: string,
+  attempt: Attempt,
+) {
+  const finalizedHeight = await connection.getBlockHeight("finalized");
+  if (finalizedHeight <= Number(attempt.last_valid_block_height)) return false;
+
+  const mint = new PublicKey(commission.asset_mint);
+  const escrow = new PublicKey(commission.escrow_address);
+  const sourceTokenAccount = getAssociatedTokenAddressSync(mint, escrow);
+  let escrowAmount: string;
+  try {
+    escrowAmount = (await connection.getTokenAccountBalance(sourceTokenAccount, "finalized")).value.amount;
+  } catch {
+    return false;
+  }
+  if (escrowAmount !== commission.amount_atomic) return false;
+
+  const status = (await connection.getSignatureStatuses(
+    [attempt.transaction_signature], { searchTransactionHistory: true },
+  )).value[0];
+  if (status) return false;
+
+  await db.query(
+    `UPDATE commission_escrow_operation_attempts
+        SET state = 'failed', failure_code = 'expired_not_found', updated_at = now()
+      WHERE id = $1`, [attempt.id],
+  );
+  await db.query(
+    `UPDATE commission_escrow_operations
+        SET state = 'pending', failure_code = 'expired_not_found', transaction_signature = NULL, updated_at = now()
+      WHERE id = $1`, [operationId],
+  );
+  return true;
+}
+
 function feeRecipients() {
   const values = [config.WORKER_FEE_WALLET, config.TREASURY_WALLET, config.STAKER_FEE_WALLET];
   if (values.some((value) => !value)) {
@@ -690,6 +734,10 @@ export async function settleCommission(commissionId: string, kind: "release" | "
           [operation.id],
         );
         attempt = undefined;
+      } else if (!status && await retireExpiredAttemptIfEscrowUnmoved(
+        connectionClient, commission, operation.id, attempt,
+      )) {
+        attempt = undefined;
       } else {
         throw new ApiError(409, "settlement_outcome_unknown", "The escrow transfer still has no verifiable Solana result. The same transaction will be checked again before any replacement is prepared.");
       }
@@ -727,13 +775,19 @@ export async function settleCommission(commissionId: string, kind: "release" | "
             destination, amountAtomic: commission.amount_atomic,
             feeAtomic: operation.fee_atomic, distribution: operation.distribution };
         }
-        await connectionClient.query(
-          "UPDATE commission_escrow_operation_attempts SET state = 'outcome_unknown', updated_at = now() WHERE id = $1", [attempt.id],
-        );
-        await connectionClient.query(
-          "UPDATE commission_escrow_operations SET state = 'outcome_unknown', updated_at = now() WHERE id = $1", [operation.id],
-        );
-        throw new ApiError(409, "settlement_outcome_unknown", "The escrow transfer expired without a verifiable Solana result. The same transaction will be checked again before any replacement is prepared.");
+        if (!status && await retireExpiredAttemptIfEscrowUnmoved(
+          connectionClient, commission, operation.id, attempt,
+        )) {
+          attempt = undefined;
+        } else {
+          await connectionClient.query(
+            "UPDATE commission_escrow_operation_attempts SET state = 'outcome_unknown', updated_at = now() WHERE id = $1", [attempt.id],
+          );
+          await connectionClient.query(
+            "UPDATE commission_escrow_operations SET state = 'outcome_unknown', updated_at = now() WHERE id = $1", [operation.id],
+          );
+          throw new ApiError(409, "settlement_outcome_unknown", "The escrow transfer expired without a verifiable Solana result. The same transaction will be checked again before any replacement is prepared.");
+        }
       }
     }
 

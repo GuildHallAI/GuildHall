@@ -557,7 +557,7 @@ export async function reconcileGhallStakeWithdrawals(limit = 25) {
     `SELECT w.id, w.user_id, a.transaction_signature AS signature, a.signed_transaction,
             a.last_valid_block_height::text, a.id AS attempt_id
        FROM ghall_stake_withdrawals w JOIN LATERAL (
-         SELECT id, transaction_signature, signed_transaction, last_valid_block_height
+         SELECT id, transaction_signature, signed_transaction, last_valid_block_height, state
            FROM ghall_stake_withdrawal_attempts WHERE withdrawal_id = w.id
           ORDER BY created_at DESC LIMIT 1
        ) a ON true
