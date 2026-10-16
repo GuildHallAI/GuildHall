@@ -118,6 +118,7 @@ function LiveWorkspace() {
   const [action, setAction] = useState<"submit" | "review" | null>(null);
   const [summary, setSummary] = useState("");
   const [evidence, setEvidence] = useState("");
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [rationale, setRationale] = useState("");
   const [decision, setDecision] = useState("accept");
   const [form, setForm] = useState({ title: "", description: "", category: "development", amount: "25", asset: "USDC", deadline: localDateTime(Date.now() + 7 * 86_400_000), requiresTribunal: false, safe: false });
@@ -130,6 +131,13 @@ function LiveWorkspace() {
   const [pendingFunding, setPendingFunding] = useState<{ commissionId: string } & PendingFunding | null>(null);
   const [takeDownOpen, setTakeDownOpen] = useState(false);
   const [takingDown, setTakingDown] = useState(false);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+
+  useEffect(() => {
+    const urls = imageFiles.map((file) => URL.createObjectURL(file));
+    setImagePreviews(urls);
+    return () => urls.forEach((url) => URL.revokeObjectURL(url));
+  }, [imageFiles]);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -343,15 +351,33 @@ function LiveWorkspace() {
     event.preventDefault();
     if (!detail) return;
     setBusy(true);
+    const stagedImageIds: string[] = [];
     try {
+      const imageEvidence = [] as { kind: "image"; label: string; value: string }[];
+      for (const file of imageFiles) {
+        const uploaded = await guildhallApi<{ id: string }>(`/commissions/${detail.id}/submission-assets`, {
+          method: "POST",
+          headers: { "content-type": file.type },
+          body: file,
+        });
+        stagedImageIds.push(uploaded.id);
+        imageEvidence.push({ kind: "image", label: file.name, value: uploaded.id });
+      }
+      const submissionEvidence = [
+        ...(evidence.trim() ? [{ kind: "text", label: "Work summary", value: evidence }] : []),
+        ...imageEvidence,
+      ];
       await guildhallApi(`/commissions/${detail.id}/submissions`, {
         method: "POST",
-        body: JSON.stringify({ summary, evidence: [{ kind: "text", label: "Work summary", value: evidence }] }),
+        body: JSON.stringify({ summary, evidence: submissionEvidence }),
       });
       toast.success("Encrypted work submission sent to the client.");
-      setAction(null); setSummary(""); setEvidence("");
+      setAction(null); setSummary(""); setEvidence(""); setImageFiles([]);
       await refresh();
-    } catch (cause) { toast.error((cause as Error).message); }
+    } catch (cause) {
+      await Promise.all(stagedImageIds.map((assetId) => guildhallApi(`/commissions/${detail.id}/submission-assets/${assetId}`, { method: "DELETE" }).catch(() => undefined)));
+      toast.error((cause as Error).message);
+    }
     finally { setBusy(false); }
   };
 
@@ -405,10 +431,28 @@ function LiveWorkspace() {
     </form></DialogContent></Dialog>
     <Sheet open={!!detail} onOpenChange={(open) => { if (!open) { setDetail(null); setAction(null); setSubmissions([]); setActivity([]); } }}><SheetContent className="commission-sheet">{detail && <><span className="eyebrow">{detail.category} / {statusLabel[detail.status] ?? detail.status}</span><SheetTitle>{detail.title}</SheetTitle><SheetDescription>Commission · {amount(detail.amountAtomic)} {assetName(detail)} · due {date(detail.deadlineAt)}</SheetDescription><div className="detail-section"><h3>Work and acceptance criteria</h3><p>{detail.description}</p></div><div className="detail-section"><h3>Parties</h3><div className="mandate-row"><span>Client</span><b>{shortWallet(detail.clientWallet)}</b></div><div className="mandate-row"><span>Provider</span><b>{detail.providerAgentName ?? (detail.providerWallet ? shortWallet(detail.providerWallet) : "Unassigned")}</b></div><div className="mandate-row"><span>Escrow</span><b>{detail.escrowAddress ? shortWallet(detail.escrowAddress) : "Preparing"}</b></div><div className="mandate-row"><span>Funding</span><b>{detail.fundingSignature ? "Confirmed on Solana" : "Awaiting client funding"}</b></div></div>
       {session && <section className="detail-section commission-timeline"><h3>Commission activity</h3>{activityLoading && !activity.length ? <p className="micro-copy">Loading activity…</p> : activityError ? <p className="micro-copy">{activityError}</p> : activity.length ? <ol>{activity.map((event) => <li key={event.id}><span className="timeline-dot"/><div><strong>{activityLabel(event.type, event.details)}</strong><time>{new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(event.createdAt))}</time>{typeof event.details.signature === "string" && <a href={`https://explorer.solana.com/tx/${event.details.signature}?cluster=${assets.cluster}`} target="_blank" rel="noreferrer">View Solana transaction ↗</a>}</div></li>)}</ol> : <p className="micro-copy">No activity has been recorded yet.</p>}</section>}
-      {session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <div className="detail-section live-submission">{submissionsLoading ? <p>Loading submitted work…</p> : latestSubmission ? <><h3>Submission · revision {latestSubmission.revision}</h3><MarkdownDeliverable value={latestSubmission.summary}/>{latestSubmission.evidence.map((item, index) => <div className="live-evidence" key={`${latestSubmission.id}-${index}`}><strong>{item.label || item.kind}</strong>{item.kind === "text" ? <MarkdownDeliverable value={item.value}/> : <span>{item.value}</span>}</div>)}</> : <p>Submission details are unavailable. Refresh and try again.</p>}</div>}
+      {session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <div className="detail-section live-submission">{submissionsLoading ? <p>Loading submitted work…</p> : latestSubmission ? <><h3>Submission · revision {latestSubmission.revision}</h3><MarkdownDeliverable value={latestSubmission.summary}/>{latestSubmission.evidence.map((item, index) => <div className="live-evidence" key={`${latestSubmission.id}-${index}`}><strong>{item.label || item.kind}</strong>{item.kind === "text" ? <MarkdownDeliverable value={item.value}/> : item.kind === "image" ? <img className="live-evidence-image" src={`/api/backend/v1/commissions/${detail.id}/submissions/${latestSubmission.id}/assets/${item.value}`} alt={item.label || "Commission image deliverable"} loading="lazy" /> : <span>{item.value}</span>}</div>)}</> : <p>Submission details are unavailable. Refresh and try again.</p>}</div>}
       {detail.status === "open" && session?.walletAddress === detail.clientWallet && <div className="detail-section live-funding-panel"><h3>Fund commission escrow</h3><p>This will ask your connected wallet to transfer exactly <strong>{amount(detail.amountAtomic)} {assetName(detail)}</strong> from your wallet to this commission’s escrow on <strong>{assets.cluster}</strong>. Review the amount and token in your wallet before approving.</p>{pendingFunding?.commissionId === detail.id ? <Button className="button button-gold" disabled={fundingBusy} onClick={() => void confirmPendingFunding()}>{fundingBusy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}Check transaction confirmation</Button> : <Button className="button button-gold" disabled={fundingBusy || !walletConnected || publicKey?.toBase58() !== detail.clientWallet} onClick={() => void fundCommission(detail)}>{fundingBusy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}Fund escrow with {assetName(detail)}</Button>}{(!walletConnected || publicKey?.toBase58() !== detail.clientWallet) && <p className="micro-copy">Connect the same wallet that posted this commission to continue.</p>}</div>}
       <div className="detail-actions">{session?.walletAddress === detail.providerWallet && detail.status === "funded" && <Button className="button button-gold" onClick={() => setAction("submit")}>Submit work</Button>}{session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <Button className="button button-gold" disabled={submissionsLoading || !latestSubmission} onClick={() => setAction("review")}>Review submission</Button>}{detail.status === "open" && session?.walletAddress !== detail.clientWallet && <Button className="button button-gold" onClick={() => void acceptWork(detail)}>Accept work</Button>}{session?.walletAddress === detail.clientWallet && detail.status === "open" && <Button variant="outline" className="button" disabled={takingDown || fundingBusy || pendingFunding?.commissionId === detail.id} onClick={() => setTakeDownOpen(true)}>{takingDown ? <LoaderCircle className="spin" size={16} /> : null}Take down commission</Button>}{!session && <p className="micro-copy">Connect your wallet to claim work or manage this commission.</p>}</div>
       </>}</SheetContent></Sheet>
-    <Dialog open={!!action} onOpenChange={(open) => { if (!open) setAction(null); }}><DialogContent className="commission-dialog"><DialogTitle>{action === "submit" ? "Submit work" : "Review submission"}</DialogTitle><DialogDescription>{action === "submit" ? "Your submission is encrypted at rest before the client can review it. Markdown is supported in your summary and deliverable." : detail?.requiresTribunal ? "Acceptance sends the submission to independent Tribunal review." : "Acceptance starts payment to the provider. Either party can open a Tribunal dispute before approval."}</DialogDescription>{action === "submit" ? <form className="guild-form" onSubmit={(event) => void submitWork(event)}><div><Label htmlFor="work-summary">Summary · Markdown supported</Label><Textarea id="work-summary" required minLength={1} maxLength={5000} rows={3} value={summary} onChange={(event) => setSummary(event.target.value)} /></div>{markdownSyntax.test(summary) && <div className="deliverable-preview"><span className="eyebrow">MARKDOWN PREVIEW</span><MarkdownDeliverable value={summary}/></div>}<div><Label htmlFor="work-evidence">Deliverable or evidence · Markdown supported</Label><Textarea id="work-evidence" required minLength={1} maxLength={50000} rows={10} value={evidence} onChange={(event) => setEvidence(event.target.value)} placeholder={'# Research summary\n\nAdd links, lists, tables, or fenced code blocks.'} /></div>{markdownSyntax.test(evidence) && <div className="deliverable-preview"><span className="eyebrow">MARKDOWN PREVIEW</span><MarkdownDeliverable value={evidence}/></div>}<div className="form-actions"><Button type="button" variant="ghost" onClick={() => setAction(null)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy}>Submit encrypted work</Button></div></form> : <form className="guild-form" onSubmit={(event) => void reviewWork(event)}><div><Label>Decision</Label><Select value={decision} onValueChange={setDecision}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="accept">{detail?.requiresTribunal ? "Accept · Tribunal review" : "Accept · release payment"}</SelectItem><SelectItem value="request_changes">Request changes</SelectItem><SelectItem value="dispute">Open Tribunal dispute</SelectItem></SelectContent></Select></div><div><Label htmlFor="review-rationale">Rationale</Label><Textarea id="review-rationale" required minLength={1} maxLength={10000} rows={4} value={rationale} onChange={(event) => setRationale(event.target.value)} /></div><div className="form-actions"><Button type="button" variant="ghost" onClick={() => setAction(null)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy}>Submit review</Button></div></form>}</DialogContent></Dialog>
+    <Dialog open={!!action} onOpenChange={(open) => { if (!open) { setAction(null); if (action === "submit") setImageFiles([]); } }}>
+      <DialogContent className="commission-dialog">
+        <DialogTitle>{action === "submit" ? "Submit work" : "Review submission"}</DialogTitle>
+        <DialogDescription>{action === "submit" ? "Your submission is stored privately for the client to review. Markdown and image attachments are supported." : detail?.requiresTribunal ? "Acceptance sends the submission to independent Tribunal review." : "Acceptance starts payment to the provider. Either party can open a Tribunal dispute before approval."}</DialogDescription>
+        {action === "submit" ? <form className="guild-form" onSubmit={(event) => void submitWork(event)}>
+          <div><Label htmlFor="work-summary">Summary · Markdown supported</Label><Textarea id="work-summary" required minLength={1} maxLength={5000} rows={3} value={summary} onChange={(event) => setSummary(event.target.value)} /></div>
+          {markdownSyntax.test(summary) && <div className="deliverable-preview"><span className="eyebrow">MARKDOWN PREVIEW</span><MarkdownDeliverable value={summary}/></div>}
+          <div><Label htmlFor="work-evidence">Deliverable or evidence · Markdown supported</Label><Textarea id="work-evidence" required={!imageFiles.length} minLength={1} maxLength={50000} rows={10} value={evidence} onChange={(event) => setEvidence(event.target.value)} placeholder={'# Design notes\n\nAdd Markdown notes or attach images.'} /></div>
+          {markdownSyntax.test(evidence) && <div className="deliverable-preview"><span className="eyebrow">MARKDOWN PREVIEW</span><MarkdownDeliverable value={evidence}/></div>}
+          <div><Label htmlFor="work-images">Image attachments · PNG, JPEG, or WebP · up to five images, 4 MiB each</Label><Input id="work-images" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const files = Array.from(event.currentTarget.files ?? []); if (files.length > 5 || files.some((file) => file.size > 4 * 1024 * 1024 || !["image/png", "image/jpeg", "image/webp"].includes(file.type))) { toast.error("Choose up to five PNG, JPEG, or WebP images under 4 MiB each."); event.currentTarget.value = ""; return; } setImageFiles(files); }} /></div>
+          {imageFiles.length > 0 && <div className="deliverable-image-grid">{imageFiles.map((file, index) => <figure key={`${file.name}-${index}`}><img src={imagePreviews[index]} alt={`Preview of ${file.name}`} /><figcaption>{file.name}<Button type="button" variant="ghost" onClick={() => setImageFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}>Remove</Button></figcaption></figure>)}</div>}
+          <div className="form-actions"><Button type="button" variant="ghost" onClick={() => setAction(null)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy}>Submit encrypted work</Button></div>
+        </form> : <form className="guild-form" onSubmit={(event) => void reviewWork(event)}>
+          <div><Label>Decision</Label><Select value={decision} onValueChange={setDecision}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="accept">{detail?.requiresTribunal ? "Accept · Tribunal review" : "Accept · release payment"}</SelectItem><SelectItem value="request_changes">Request changes</SelectItem><SelectItem value="dispute">Open Tribunal dispute</SelectItem></SelectContent></Select></div>
+          <div><Label htmlFor="review-rationale">Rationale</Label><Textarea id="review-rationale" required minLength={1} maxLength={10000} rows={4} value={rationale} onChange={(event) => setRationale(event.target.value)} /></div>
+          <div className="form-actions"><Button type="button" variant="ghost" onClick={() => setAction(null)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy}>Submit review</Button></div>
+        </form>}
+      </DialogContent>
+    </Dialog>
   </>;
 }

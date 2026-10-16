@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { z } from "zod";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
@@ -13,6 +13,8 @@ import { openTribunalCase } from "../tribunal.js";
 import { evidenceItemSchema, submitCommissionWork } from "../commission-work.js";
 import { claimCommissionForWallet, createCommissionForWallet, getCommissionFundingInstructions, publicCommission } from "../commission-service.js";
 import { reviewCommissionSubmission } from "../commission-review.js";
+import { discardStagedCommissionImage, stageCommissionImage } from "../commission-assets.js";
+import { readCommissionImage } from "../cloudinary-assets.js";
 
 const router = Router();
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
@@ -306,6 +308,26 @@ router.post("/:id/submissions", requireAuth, async (request, response) => {
   response.status(201).json({ data: submission });
 });
 
+router.post("/:id/submission-assets", requireAuth,
+  express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: "10mb" }), async (request, response) => {
+    const id = uuidSchema.parse(request.params.id);
+    if (!Buffer.isBuffer(request.body)) throw new ApiError(400, "image_required", "Send a PNG, JPEG, or WebP image as the request body.");
+    const asset = await stageCommissionImage({
+      commissionId: id,
+      providerUserId: request.auth!.userId,
+      bytes: request.body,
+      contentType: String(request.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase(),
+    });
+    response.status(201).json({ data: asset });
+  });
+
+router.delete("/:id/submission-assets/:assetId", requireAuth, async (request, response) => {
+  const commissionId = uuidSchema.parse(request.params.id);
+  const assetId = uuidSchema.parse(request.params.assetId);
+  await discardStagedCommissionImage({ commissionId, assetId, providerUserId: request.auth!.userId });
+  response.status(204).end();
+});
+
 router.get("/:id/submissions", requireAuth, async (request, response) => {
   const id = uuidSchema.parse(request.params.id);
   const commission = await commissionById(id);
@@ -344,6 +366,28 @@ router.get("/:id/activity", requireAuth, async (request, response) => {
   response.json({ data: result.rows.reverse().map((row) => ({
     id: row.id.toString(), type: row.event_type, details: row.details, createdAt: row.created_at,
   })) });
+});
+
+router.get("/:id/submissions/:submissionId/assets/:assetId", requireAuth, async (request, response) => {
+  const commissionId = uuidSchema.parse(request.params.id);
+  const submissionId = uuidSchema.parse(request.params.submissionId);
+  const assetId = uuidSchema.parse(request.params.assetId);
+  const asset = await pool.query<{ content_type: string; cloudinary_public_id: string; format: string }>(
+    `SELECT a.content_type, a.cloudinary_public_id, a.format
+       FROM commission_submission_assets a
+       JOIN commissions c ON c.id = a.commission_id
+      WHERE a.id = $1 AND a.commission_id = $2 AND a.submission_id = $3
+        AND (c.client_user_id = $4 OR c.provider_user_id = $4)`,
+    [assetId, commissionId, submissionId, request.auth!.userId],
+  );
+  if (!asset.rows[0]) throw new ApiError(404, "commission_image_not_found", "Image not found for this commission submission.");
+  const bytes = await readCommissionImage(asset.rows[0].cloudinary_public_id, asset.rows[0].format);
+  response.setHeader("Content-Type", asset.rows[0].content_type);
+  response.setHeader("Content-Length", bytes.length);
+  response.setHeader("Content-Disposition", "inline");
+  response.setHeader("Cache-Control", "private, no-store");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.status(200).send(bytes);
 });
 
 router.post("/:id/review", requireAuth, async (request, response) => {

@@ -165,7 +165,7 @@ export function AgentManagement({ session }: { session: WalletSession | null }) 
     <Dialog open={!!credential} onOpenChange={(open) => { if (!open) setCredential(null); }}>
       <DialogContent className="commission-dialog">
         <DialogTitle>Save {credential?.agentName} runtime token</DialogTitle>
-        <DialogDescription>This credential is displayed once. It expires {credential ? formatExpiry(credential.expiresAt) : ""}. Add it to your runtime host as <code>GUILDHALL_AGENT_RUNTIME_TOKEN</code>.</DialogDescription>
+        <DialogDescription>This credential is displayed once. It expires {credential ? formatExpiry(credential.expiresAt) : ""}. Keep your existing runtime token and add this one to <code>GUILDHALL_AGENT_RUNTIME_TOKENS</code> on the runtime host. Separate multiple tokens with commas.</DialogDescription>
         <div className="guild-form"><div><Label htmlFor="issued-agent-token">Runtime token</Label><Input id="issued-agent-token" readOnly autoFocus value={credential?.runtimeToken ?? ""} onFocus={(event) => event.currentTarget.select()} /></div><div className="form-actions"><Button type="button" variant="outline" onClick={() => void copyToken()}><Copy size={16} />Copy token</Button><Button type="button" className="button button-gold" onClick={() => setCredential(null)}>Done</Button></div></div>
       </DialogContent>
     </Dialog>

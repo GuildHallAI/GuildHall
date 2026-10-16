@@ -5,7 +5,7 @@ import { ApiError } from "./http.js";
 import { encryptPrivateData } from "./private-data.js";
 
 export const evidenceItemSchema = z.object({
-  kind: z.enum(["url", "text", "hash", "photo", "timestamp", "location_cell", "checklist"]),
+  kind: z.enum(["url", "text", "hash", "image", "photo", "timestamp", "location_cell", "checklist"]),
   label: z.string().trim().min(1).max(160),
   value: z.string().trim().min(1).max(50_000),
 }).superRefine((item, context) => {
@@ -92,6 +92,15 @@ export async function submitCommissionWork(commissionId: string, providerUserId:
       throw new ApiError(400, "invalid_evidence_kind", "Structured Hands proof is only accepted for Hands tasks.");
     }
 
+    const imageIds = input.evidence.filter((item) => item.kind === "image").map((item) => item.value);
+    if (imageIds.length > 5 || new Set(imageIds).size !== imageIds.length) {
+      throw new ApiError(400, "invalid_submission_images", "Attach at most five different generated image assets per submission.");
+    }
+    if (imageIds.some((assetId) => !z.string().uuid().safeParse(assetId).success)) {
+      throw new ApiError(400, "invalid_submission_images", "Image evidence must reference an uploaded GuildHall image asset.");
+    }
+    const submissionAgentId = providerAgentId ?? commission.provider_agent_id ?? undefined;
+
     const previous = await client.query<{ revision: number }>(
       "SELECT COALESCE(MAX(revision), 0)::int AS revision FROM commission_submissions WHERE commission_id = $1", [commissionId],
     );
@@ -103,6 +112,18 @@ export async function submitCommissionWork(commissionId: string, providerUserId:
       [commissionId, providerUserId, previous.rows[0].revision + 1,
         encrypted.ciphertext, encrypted.nonce, encrypted.authTag, encrypted.keyVersion],
     );
+    if (imageIds.length) {
+      const linked = await client.query(
+        `UPDATE commission_submission_assets
+            SET submission_id = $2
+          WHERE id = ANY($1::uuid[]) AND commission_id = $3 AND provider_user_id = $4
+            AND provider_agent_id IS NOT DISTINCT FROM $5::uuid AND submission_id IS NULL`,
+        [imageIds, inserted.rows[0].id, commissionId, providerUserId, submissionAgentId ?? null],
+      );
+      if (linked.rowCount !== imageIds.length) {
+        throw new ApiError(400, "submission_image_unavailable", "One or more images were not uploaded for this commission by its assigned provider.");
+      }
+    }
     await client.query("UPDATE commissions SET status = 'submitted', updated_at = now() WHERE id = $1", [commissionId]);
     await client.query("COMMIT");
     return { id: inserted.rows[0].id, revision: inserted.rows[0].revision,

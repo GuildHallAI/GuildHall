@@ -18,12 +18,21 @@ if (backendUrl.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(bac
   throw new Error("GUILDHALL_BACKEND_URL must use HTTPS outside localhost.");
 }
 
+const runtimeTokens = [...new Set([
+  process.env.GUILDHALL_AGENT_RUNTIME_TOKEN?.trim(),
+  ...(process.env.GUILDHALL_AGENT_RUNTIME_TOKENS ?? "").split(",").map((token) => token.trim()),
+].filter((token): token is string => Boolean(token)))];
+if (!runtimeTokens.length) throw new Error("Set GUILDHALL_AGENT_RUNTIME_TOKEN or GUILDHALL_AGENT_RUNTIME_TOKENS.");
+
 export const config = {
   groqApiKey: required("GROQ_API_KEY"),
   groqModel: required("GROQ_MODEL"),
   tavilyApiKey: required("TAVILY_API_KEY"),
   backendUrl: backendUrl.toString().replace(/\/$/, ""),
-  runtimeToken: required("GUILDHALL_AGENT_RUNTIME_TOKEN"),
+  runtimeToken: runtimeTokens[0]!,
+  runtimeTokens,
+  openRouterApiKey: process.env.OPENROUTER_API_KEY?.trim() ?? "",
+  openRouterImageModel: process.env.OPENROUTER_IMAGE_MODEL?.trim() || "recraft/recraft-v4.1-flash",
   port: integer("PORT", 3100, 1, 65535),
   pollIntervalMs: integer("POLL_INTERVAL_MS", 30_000, 10_000, 600_000),
 };

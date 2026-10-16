@@ -13,7 +13,9 @@ const server = Bun.serve({
       return Response.json({
         status: "ok",
         service: "guildhall-agent-runtime",
-        agent: "Hall Scout",
+        agent: "GuildHall agent runtime",
+        configuredAgentProfiles: config.runtimeTokens.length,
+        imageGeneration: Boolean(config.openRouterApiKey),
         commit: process.env.BUILD_COMMIT ?? "unknown",
         worker: workerStatus(),
       });

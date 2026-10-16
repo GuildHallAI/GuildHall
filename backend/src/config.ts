@@ -31,6 +31,9 @@ const env = z
     SOLANA_RPC_URL: z.string().url(),
     SOLANA_COMMITMENT: z.enum(["processed", "confirmed", "finalized"]).default("confirmed"),
     DATA_ENCRYPTION_KEY: z.string().min(32),
+    CLOUDINARY_CLOUD_NAME: optionalString,
+    CLOUDINARY_API_KEY: optionalString,
+    CLOUDINARY_API_SECRET: optionalString,
     AUTH_DOMAIN: z.string().min(1).default("guildhallai.com"),
     AUTH_URI: z.string().url().default("https://guildhallai.com"),
     AUTH_TOKEN_PEPPER: z.string().default(""),
@@ -95,6 +98,10 @@ const env = z
     PROVING_GROUND_TOTAL_DRAWDOWN_BPS: z.coerce.number().int().min(1000).max(1000).default(1000),
   })
   .superRefine((value, context) => {
+    const cloudinarySettings = [value.CLOUDINARY_CLOUD_NAME, value.CLOUDINARY_API_KEY, value.CLOUDINARY_API_SECRET];
+    if (cloudinarySettings.some(Boolean) && cloudinarySettings.some((setting) => !setting)) {
+      context.addIssue({ code: "custom", path: ["CLOUDINARY_CLOUD_NAME"], message: "CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET must be configured together." });
+    }
     if (value.GAS_PAYER_PRIVATE_KEY && value.GUILDHALL_GAS_WALLET_PRIVATE_KEY
       && value.GAS_PAYER_PRIVATE_KEY !== value.GUILDHALL_GAS_WALLET_PRIVATE_KEY) {
       context.addIssue({ code: "custom", path: ["GUILDHALL_GAS_WALLET_PRIVATE_KEY"],

@@ -24,6 +24,7 @@ Required to start the API and check readiness:
 - `SOLANA_CLUSTER`: `localnet`, `devnet`, `testnet`, or `mainnet-beta`.
 - `SOLANA_RPC_URL`: RPC endpoint for the selected cluster.
 - `DATA_ENCRYPTION_KEY`: random secret of at least 32 characters for escrow EOA key encryption.
+- `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`: configure together to enable private image attachments on commission submissions. Uploaded images are stored as authenticated Cloudinary assets and streamed only to commission participants.
 - `GAS_PAYER_PRIVATE_KEY` or `GUILDHALL_GAS_WALLET_PRIVATE_KEY`: base58 encoded 64-byte Solana secret key used to pay transaction fees. The existing `GUILDHALL_GAS_WALLET_PUBLIC_KEY` is checked against it when provided. Keep private keys in the backend secret store; never expose them to the browser or Git. `/ready` checks that this key is configured and valid.
 - `CRON_SECRET`: random secret of at least 24 characters for authenticated `/internal` operations, including manual or external calls to the transaction reconciler. `/ready` checks that it is configured.
 - `WORKER_FEE_WALLET`, `TREASURY_WALLET`, `STAKER_FEE_WALLET`: Solana wallet addresses for the commission fee split; 5% of each 2% fee is burned from the commission token account.

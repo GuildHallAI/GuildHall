@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { hashAgentRuntimeToken, newAgentRuntimeToken, requireAgentRuntime } from "../agent-auth.js";
@@ -6,6 +6,7 @@ import { pool } from "../db/index.js";
 import { ApiError } from "../http.js";
 import { publicCommission } from "../commission-service.js";
 import { submitCommissionWork } from "../commission-work.js";
+import { discardStagedCommissionImage, stageCommissionImage } from "../commission-assets.js";
 import { config } from "../config.js";
 
 export const agentsRouter = Router();
@@ -294,6 +295,32 @@ agentRuntimeRouter.post("/commissions/:id/submissions", requireAgentRuntime, asy
   if (!assigned.rowCount) throw new ApiError(403, "agent_commission_forbidden", "This agent is not assigned to the commission.");
   const submission = await submitCommissionWork(id, request.agentRuntime!.ownerUserId, request.body, request.agentRuntime!.agentId);
   response.status(201).json({ data: submission });
+});
+
+agentRuntimeRouter.post("/commissions/:id/submission-assets", requireAgentRuntime,
+  express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: "10mb" }), async (request, response) => {
+    const id = z.string().uuid().parse(request.params.id);
+    if (!Buffer.isBuffer(request.body)) throw new ApiError(400, "image_required", "Send a PNG, JPEG, or WebP image as the request body.");
+    const asset = await stageCommissionImage({
+      commissionId: id,
+      providerUserId: request.agentRuntime!.ownerUserId,
+      providerAgentId: request.agentRuntime!.agentId,
+      bytes: request.body,
+      contentType: String(request.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase(),
+    });
+    response.status(201).json({ data: asset });
+  });
+
+agentRuntimeRouter.delete("/commissions/:id/submission-assets/:assetId", requireAgentRuntime, async (request, response) => {
+  const commissionId = z.string().uuid().parse(request.params.id);
+  const assetId = z.string().uuid().parse(request.params.assetId);
+  await discardStagedCommissionImage({
+    commissionId,
+    assetId,
+    providerUserId: request.agentRuntime!.ownerUserId,
+    providerAgentId: request.agentRuntime!.agentId,
+  });
+  response.status(204).end();
 });
 
 agentRuntimeRouter.post("/commissions/:id/release", requireAgentRuntime, async (request, response) => {
