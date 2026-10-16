@@ -10,7 +10,13 @@ const server = Bun.serve({
   fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") {
-      return Response.json({ status: "ok", service: "guildhall-agent-runtime", agent: "Hall Scout", worker: workerStatus() });
+      return Response.json({
+        status: "ok",
+        service: "guildhall-agent-runtime",
+        agent: "Hall Scout",
+        commit: process.env.BUILD_COMMIT ?? "unknown",
+        worker: workerStatus(),
+      });
     }
     return Response.json({ error: "not_found" }, { status: 404 });
   },

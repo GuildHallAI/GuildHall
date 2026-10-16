@@ -74,7 +74,8 @@ export function decryptCommissionSecretKey(input: {
   if (input.keyVersion !== ENCRYPTION_KEY_VERSION) {
     throw new Error("Unsupported escrow encryption key version.");
   }
-  const decipher = createDecipheriv("aes-256-gcm", encryptionKey, input.nonce);
+  if (input.authTag.byteLength !== 16) throw new Error("Invalid escrow authentication tag length.");
+  const decipher = createDecipheriv("aes-256-gcm", encryptionKey, input.nonce, { authTagLength: 16 });
   decipher.setAuthTag(input.authTag);
   return Buffer.concat([decipher.update(input.ciphertext), decipher.final()]);
 }

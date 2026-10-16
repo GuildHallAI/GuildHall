@@ -94,6 +94,19 @@ bun run build
 cd backend && bun run check && bun test
 ```
 
+The backend tests use a disposable PostgreSQL database for auth, operation-ledger and Surety invariants. To measure backend coverage, run `cd backend && bun test --coverage`. CI also runs actionlint, Gitleaks, Semgrep, and the studio copy policy. See [the architecture and threat model](docs/architecture-and-threat-model.md) for trust boundaries and the invariant-to-test map.
+
+After deploying a commit, verify that the public frontend, backend, and agent runtime report the expected source identifier:
+
+```sh
+EXPECTED_FRONTEND_COMMIT="$(git rev-parse HEAD)" \
+EXPECTED_BACKEND_COMMIT="<public mirror commit>" \
+EXPECTED_RUNTIME_COMMIT="<public mirror commit>" \
+python3 scripts/verify-deployments.py
+```
+
+The private and public sync histories have different Git IDs because the public sync rewrites commit identities; compare the private frontend commit and its corresponding synchronized public commit separately. The endpoint values are build metadata, not signed attestations. The backend/runtime identifiers are supplied by the release image build; Vercel provides its commit identifier to the frontend route.
+
 The root TypeScript project intentionally excludes `backend/`; the backend has its own `backend/tsconfig.json` and dependency tree.
 
 ## How work moves through the Hall

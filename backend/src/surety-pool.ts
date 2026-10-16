@@ -158,36 +158,63 @@ export async function reconcileSuretyPolicies(limit = 50) {
   finally { db.release(); }
 }
 
-async function markOperationConfirmed(operation: {
+export async function markOperationConfirmed(operation: {
   id: string; kind: string; reference_id: string; amount_atomic: string; shares_atomic: string | null;
 }, attemptId: string, signature: string) {
   const db = await pool.connect();
   try {
     await db.query("BEGIN");
+    const lockedOperation = await db.query<{
+      state: string; transaction_signature: string | null; kind: string; reference_id: string;
+      amount_atomic: string; shares_atomic: string | null;
+    }>(
+      `SELECT state, transaction_signature, kind, reference_id,
+              amount_atomic::text, shares_atomic::text
+         FROM surety_pool_operations WHERE id = $1 FOR UPDATE`, [operation.id],
+    );
+    const current = lockedOperation.rows[0];
+    if (!current) throw new Error("Surety pool operation was not found.");
+    const attempt = await db.query<{ state: string; transaction_signature: string }>(
+      `SELECT state, transaction_signature FROM surety_pool_operation_attempts
+        WHERE id = $1 AND operation_id = $2 FOR UPDATE`, [attemptId, operation.id],
+    );
+    if (!attempt.rows[0] || attempt.rows[0].transaction_signature !== signature) {
+      throw new Error("Surety pool operation attempt does not match the confirmed transaction.");
+    }
+    if (current.state === "confirmed") {
+      if (current.transaction_signature !== signature || attempt.rows[0].state !== "confirmed") {
+        throw new Error("Surety pool operation was confirmed with a different transaction.");
+      }
+      await db.query("COMMIT");
+      return;
+    }
+    if (current.state !== "submitted" || attempt.rows[0].state !== "submitted") {
+      throw new Error("Surety pool operation is not awaiting confirmation.");
+    }
     await db.query("UPDATE surety_pool_operation_attempts SET state = 'confirmed', updated_at = now() WHERE id = $1", [attemptId]);
     await db.query("UPDATE surety_pool_operations SET state = 'confirmed', transaction_signature = $2, updated_at = now() WHERE id = $1", [operation.id, signature]);
     const balance = await db.query(
       `UPDATE surety_pool SET accounted_balance_atomic = accounted_balance_atomic - $1::numeric, updated_at = now()
-        WHERE id = 1 AND accounted_balance_atomic >= $1::numeric RETURNING id`, [operation.amount_atomic],
+        WHERE id = 1 AND accounted_balance_atomic >= $1::numeric RETURNING id`, [current.amount_atomic],
     );
     if (!balance.rowCount) throw new Error("Surety pool accounted balance would become negative.");
-    if (operation.kind === "claim") {
-      await db.query("UPDATE surety_policies SET state = 'claimed', updated_at = now() WHERE id = $1 AND state = 'claim_pending'", [operation.reference_id]);
-    } else if (operation.kind === "premium_fee") {
-      await db.query("UPDATE surety_policies SET treasury_fee_paid = true, updated_at = now() WHERE id = $1", [operation.reference_id]);
-    } else if (operation.kind === "premium_refund") {
-      await db.query("UPDATE surety_policies SET state = 'refunded', updated_at = now() WHERE id = $1", [operation.reference_id]);
-    } else if (operation.kind === "withdrawal") {
+    if (current.kind === "claim") {
+      await db.query("UPDATE surety_policies SET state = 'claimed', updated_at = now() WHERE id = $1 AND state = 'claim_pending'", [current.reference_id]);
+    } else if (current.kind === "premium_fee") {
+      await db.query("UPDATE surety_policies SET treasury_fee_paid = true, updated_at = now() WHERE id = $1", [current.reference_id]);
+    } else if (current.kind === "premium_refund") {
+      await db.query("UPDATE surety_policies SET state = 'refunded', updated_at = now() WHERE id = $1", [current.reference_id]);
+    } else if (current.kind === "withdrawal") {
       const request = await db.query<{ user_id: string; state: string }>(
-        "SELECT user_id, state FROM surety_withdrawal_requests WHERE id = $1 FOR UPDATE", [operation.reference_id],
+        "SELECT user_id, state FROM surety_withdrawal_requests WHERE id = $1 FOR UPDATE", [current.reference_id],
       );
-      if (!request.rows[0] || request.rows[0].state !== "processing" || !operation.shares_atomic) throw new Error("Surety withdrawal request state is invalid.");
+      if (!request.rows[0] || request.rows[0].state !== "processing" || !current.shares_atomic) throw new Error("Surety withdrawal request state is invalid.");
       const shares = await db.query(
         `UPDATE surety_pool_share_accounts SET shares_atomic = shares_atomic - $2::numeric, updated_at = now()
-          WHERE user_id = $1 AND shares_atomic >= $2::numeric RETURNING user_id`, [request.rows[0].user_id, operation.shares_atomic],
+          WHERE user_id = $1 AND shares_atomic >= $2::numeric RETURNING user_id`, [request.rows[0].user_id, current.shares_atomic],
       );
       if (!shares.rowCount) throw new Error("Surety withdrawal exceeds the account's remaining shares.");
-      await db.query("UPDATE surety_withdrawal_requests SET state = 'confirmed', updated_at = now() WHERE id = $1", [operation.reference_id]);
+      await db.query("UPDATE surety_withdrawal_requests SET state = 'confirmed', updated_at = now() WHERE id = $1", [current.reference_id]);
     }
     await db.query("COMMIT");
   } catch (error) { await db.query("ROLLBACK"); throw error; }

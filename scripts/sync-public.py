@@ -97,10 +97,14 @@ def rewrite_export(stream: bytes) -> bytes:
 
 def main() -> None:
     run("git", "rev-parse", "--verify", SOURCE_BRANCH)
+    source_commit = run("git", "rev-parse", SOURCE_BRANCH).decode().strip()
     exported = run("git", "fast-export", "--show-original-ids", SOURCE_BRANCH)
     run("git", "fast-import", "--force", input_data=rewrite_export(exported))
+    public_commit = run("git", "rev-parse", f"refs/heads/{PUBLIC_BRANCH}").decode().strip()
     run("git", "push", PUBLIC_REMOTE, f"{PUBLIC_BRANCH}:main", "--force")
     print(f"Published sanitized {PUBLIC_BRANCH} to {PUBLIC_REMOTE}/main.")
+    print(f"Private source commit: {source_commit}")
+    print(f"Synchronized public commit: {public_commit}")
 
 
 if __name__ == "__main__":

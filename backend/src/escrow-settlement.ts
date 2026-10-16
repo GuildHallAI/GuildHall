@@ -53,7 +53,7 @@ function feeRecipients() {
   }
 }
 
-function commissionDistribution(grossAtomic: string, split = false, feeBasisPoints = 200n): { feeAtomic: string; distribution: Record<string, string> } {
+export function commissionDistribution(grossAtomic: string, split = false, feeBasisPoints = 200n): { feeAtomic: string; distribution: Record<string, string> } {
   const gross = BigInt(grossAtomic);
   const fee = gross * feeBasisPoints / 10_000n;
   const workers = fee * 80n / 100n;
@@ -74,7 +74,7 @@ function commissionDistribution(grossAtomic: string, split = false, feeBasisPoin
   };
 }
 
-type CrewShare = { userId: string; walletAddress: string; shareBps: number; payoutOrder: number; charterBuybackWallet: string | null };
+export type CrewShare = { userId: string; walletAddress: string; shareBps: number; payoutOrder: number; charterBuybackWallet: string | null };
 
 async function loadCrewShares(client: PoolClient, commissionId: string): Promise<CrewShare[]> {
   const result = await client.query<{ user_id: string; wallet_address: string; share_bps: number; payout_order: number; charter_buyback_wallet: string | null }>(
@@ -94,7 +94,7 @@ async function loadCrewShares(client: PoolClient, commissionId: string): Promise
   });
 }
 
-function allocateCrewAmount(totalAtomic: string, shares: CrewShare[]) {
+export function allocateCrewAmount(totalAtomic: string, shares: CrewShare[]) {
   let remainder = BigInt(totalAtomic);
   return shares.map((share, index) => {
     const amount = index === shares.length - 1
@@ -107,7 +107,7 @@ function allocateCrewAmount(totalAtomic: string, shares: CrewShare[]) {
 
 type CrewTransfer = { destination: string; amountAtomic: string; kind: "transfer" | "burn" };
 
-function crewTransferPlan(
+export function crewTransferPlan(
   providerTotal: string,
   clientTotal: string | undefined,
   clientWallet: string,

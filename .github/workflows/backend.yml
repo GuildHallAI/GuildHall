@@ -19,6 +19,20 @@ jobs:
     name: Validate backend
     if: github.repository == 'guildhallAI/guildhall'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        env:
+          POSTGRES_DB: guildhall
+          POSTGRES_USER: guildhall
+          POSTGRES_PASSWORD: guildhall
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U guildhall -d guildhall"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -30,7 +44,7 @@ jobs:
 
       - name: Install backend dependencies
         working-directory: backend
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Type-check backend
         working-directory: backend
@@ -44,6 +58,8 @@ jobs:
           SOLANA_CLUSTER: devnet
           SOLANA_RPC_URL: https://api.devnet.solana.com
           DATA_ENCRYPTION_KEY: guildhall-ci-only-encryption-key-not-for-production
+          CRON_SECRET: guildhall-ci-only-cron-secret-for-integration-tests
+          USDC_MINT: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
 
   runtime-tests:
     name: Validate GHAR
@@ -68,7 +84,7 @@ jobs:
           bun-version: 1.4.2
 
       - name: Install GHAR dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Test GHAR
         run: bun run test
@@ -79,9 +95,55 @@ jobs:
       - name: Build GHAR
         run: bun run build
 
+  security:
+    name: Security and workflow checks
+    if: github.repository == 'guildhallAI/guildhall'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned scanners
+        env:
+          GOBIN: ${{ runner.temp }}/audit-bin
+        run: |
+          mkdir -p "$GOBIN"
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          echo "$GOBIN" >> "$GITHUB_PATH"
+
+      - name: Validate workflow syntax
+        run: actionlint -color
+
+      - name: Scan repository history for secrets
+        run: gitleaks git . --redact --no-banner --exit-code 1
+
+      - name: Install pinned Semgrep
+        run: |
+          python3 -m venv "$RUNNER_TEMP/semgrep-env"
+          "$RUNNER_TEMP/semgrep-env/bin/pip" install --disable-pip-version-check 'semgrep==1.180.0'
+
+      - name: Scan server and workflow code
+        run: >-
+          "$RUNNER_TEMP/semgrep-env/bin/semgrep" scan
+          --config=p/typescript
+          --config=p/nodejs
+          --config=p/secrets
+          --config=p/github-actions
+          --error --quiet
+          backend/src ghar/src app/api/backend app/api/version scripts/check-studio-copy.py .github/workflows/backend.yml
+
+      # Reject APY and return-promise wording in frontend copy in CI.
+      - name: Enforce studio copy policy
+        run: python3 scripts/check-studio-copy.py
+
   build-push:
     name: Build and publish backend image
-    needs: test
+    needs: [test, security]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'guildhallAI/guildhall'
     runs-on: ubuntu-latest
     permissions:
@@ -119,6 +181,7 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: true
+          build-args: BUILD_COMMIT=${{ github.sha }}
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
 
@@ -133,7 +196,6 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-        with:
           fetch-depth: 0
 
       - name: Create release
@@ -162,7 +224,7 @@ jobs:
 
   build-push-runtime:
     name: Build and publish GHAR image
-    needs: [test, runtime-tests]
+    needs: [test, runtime-tests, security]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'guildhallAI/guildhall'
     runs-on: ubuntu-latest
     permissions:
@@ -200,6 +262,7 @@ jobs:
           context: ./ghar
           file: ./ghar/Dockerfile
           push: true
+          build-args: BUILD_COMMIT=${{ github.sha }}
           tags: ${{ steps.runtime-metadata.outputs.tags }}
           labels: ${{ steps.runtime-metadata.outputs.labels }}
 

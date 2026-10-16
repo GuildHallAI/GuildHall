@@ -20,7 +20,8 @@ export function decryptPrivateData<T>(input: {
   keyVersion: number;
 }): T {
   if (input.keyVersion !== 1) throw new Error("Unsupported private data encryption key version.");
-  const decipher = createDecipheriv("aes-256-gcm", key, input.nonce);
+  if (input.authTag.byteLength !== 16) throw new Error("Invalid private-data authentication tag length.");
+  const decipher = createDecipheriv("aes-256-gcm", key, input.nonce, { authTagLength: 16 });
   decipher.setAuthTag(input.authTag);
   const plaintext = Buffer.concat([decipher.update(input.ciphertext), decipher.final()]).toString("utf8");
   return JSON.parse(plaintext) as T;

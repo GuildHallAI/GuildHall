@@ -35,3 +35,13 @@ Out of scope:
 ## Research expectations
 
 Please act in good faith, avoid accessing or modifying other users’ data, and do not move funds or disrupt service. If you follow this policy, make a reasonable effort to avoid privacy violations and promptly report findings, GuildHall will not pursue legal action for your research. We will credit reporters who request recognition, subject to their consent and applicable law.
+
+## Security boundaries and accepted risks
+
+- The backend is a custodial signer for commission escrow EOAs. Operators with both PostgreSQL access and `DATA_ENCRYPTION_KEY` access can decrypt those EOA keys. Access to the backend host, database, encryption key, gas payer, and deployment credentials is privileged production access.
+- PostgreSQL and Solana cannot commit atomically. Durable operation attempts and reconciliation reduce duplicate-payment risk, but an ambiguous transaction can require manual chain inspection before recovery.
+- Solana RPC, token programs, wallet software, and configured third-party APIs are external dependencies. GuildHall cannot guarantee their availability or behavior.
+- The repository does not provide a single pause switch that safely halts every work and payment flow while preserving all exits. Suspending the API or signer can delay operations but cannot reverse confirmed chain transactions.
+- Audit scanner matches and package advisories remain recorded until they are fixed or their reachability is reassessed. See the [architecture and threat model](docs/architecture-and-threat-model.md).
+
+Production operators are the people with access to the backend host, database project, deployment secret store, and GitHub release settings. Keep those roles limited and review access when team membership changes. Incident response and deployment identity checks are documented in the architecture/threat model.

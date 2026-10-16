@@ -9,3 +9,4 @@ dist/
 technical-docs/
 .DS_Store
 *.pem
+.audit-grade/runs/

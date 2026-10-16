@@ -7,5 +7,6 @@ healthRouter.get("/", (_request, response) => {
     status: "ok",
     timestamp: new Date().toISOString(),
     version: process.env.npm_package_version ?? "0.1.0",
+    commit: process.env.BUILD_COMMIT ?? "unknown",
   });
 });
