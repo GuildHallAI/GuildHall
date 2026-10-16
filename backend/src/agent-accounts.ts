@@ -1,6 +1,5 @@
 import { Keypair, PublicKey, Transaction, Connection } from "@solana/web3.js";
 import {
-  createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -39,6 +38,10 @@ async function buildAttempt(db: PoolClient, account: AgentAccount, operation: Ag
   const destinationWallet = new PublicKey(operation.destination_wallet);
   const source = getAssociatedTokenAddressSync(mint, agentWallet);
   const destination = getAssociatedTokenAddressSync(mint, destinationWallet);
+  const destinationInfo = await connection.getAccountInfo(destination, config.SOLANA_COMMITMENT);
+  if (!destinationInfo) {
+    throw new ApiError(409, "agent_destination_token_account_missing", "The destination wallet must create its stablecoin token account before an agent transfer. This prevents the platform gas wallet from paying arbitrary account rent.");
+  }
   const sourceInfo = await connection.getAccountInfo(source, config.SOLANA_COMMITMENT);
   if (!sourceInfo) throw new ApiError(409, "agent_balance_low", "The agent account has no token account for this asset.");
   const balance = await connection.getTokenAccountBalance(source, config.SOLANA_COMMITMENT);
@@ -54,7 +57,6 @@ async function buildAttempt(db: PoolClient, account: AgentAccount, operation: Ag
   if (!agentKey.publicKey.equals(agentWallet)) throw new Error("Agent private key does not match its recorded public key.");
   const latest = await connection.getLatestBlockhash(config.SOLANA_COMMITMENT);
   const transaction = new Transaction({ feePayer: payer.publicKey, ...latest }).add(
-    createAssociatedTokenAccountIdempotentInstruction(payer.publicKey, destination, destinationWallet, mint),
     createTransferCheckedInstruction(source, mint, destination, agentWallet, BigInt(operation.amount_atomic), 6, [], TOKEN_PROGRAM_ID),
   );
   transaction.partialSign(payer, agentKey);

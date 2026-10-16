@@ -172,7 +172,7 @@ function LiveWorkspace() {
     }
     setFundingBusy(true);
     try {
-      const instructions = await guildhallApi<FundingInstructions>(`/commissions/${commission.id}/funding-instructions`);
+      const instructions = await guildhallApi<FundingInstructions>(`/commissions/${commission.id}/funding-instructions`, { method: "POST", body: JSON.stringify({}) });
       if (instructions.commissionId !== commission.id || instructions.clientWallet !== commission.clientWallet || instructions.assetMint !== commission.assetMint || instructions.amountAtomic !== commission.amountAtomic) {
         throw new Error("The funding instructions do not match this commission. No transaction was sent.");
       }

@@ -48,13 +48,13 @@ export async function issueWalletNonce(input: unknown) {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [walletAddress]);
     await client.query("DELETE FROM auth_nonces WHERE expires_at < now() - interval '1 day'");
-    const openNonces = await client.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM auth_nonces WHERE wallet_address = $1 AND consumed_at IS NULL AND expires_at > now()",
-      [walletAddress],
+    await client.query(
+      `DELETE FROM auth_nonces WHERE nonce IN (
+         SELECT nonce FROM auth_nonces
+          WHERE wallet_address = $1 AND consumed_at IS NULL AND expires_at > now()
+          ORDER BY issued_at DESC OFFSET 4
+       )`, [walletAddress],
     );
-    if (Number(openNonces.rows[0].count) >= 5) {
-      throw new ApiError(429, "nonce_rate_limited", "Too many active sign-in requests. Wait for one to expire and try again.");
-    }
     await client.query(
       "INSERT INTO auth_nonces (nonce, wallet_address, issued_at, expires_at) VALUES ($1, $2, $3, $4)",
       [nonce, walletAddress, issuedAt, expiresAt],

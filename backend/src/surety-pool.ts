@@ -90,10 +90,13 @@ export async function reconcileSuretyPolicies(limit = 50) {
     const due = await db.query<{
       id: string; commission_id: string; state: string; premium_atomic: string; treasury_fee_atomic: string;
       client_wallet: string; commission_status: string; deadline_at: Date; tribunal_outcome: string | null;
+      refund_atomic: string | null;
     }>(
       `SELECT p.id, p.commission_id, p.state, p.premium_atomic::text, p.treasury_fee_atomic::text,
               p.client_wallet, c.status AS commission_status, c.deadline_at,
-              (SELECT tc.outcome FROM tribunal_cases tc WHERE tc.commission_id = c.id AND tc.stage = 'decided' LIMIT 1) AS tribunal_outcome
+              (SELECT tc.outcome FROM tribunal_cases tc WHERE tc.commission_id = c.id AND tc.stage = 'decided' LIMIT 1) AS tribunal_outcome,
+              (SELECT COALESCE(sum(o.amount_atomic), 0)::text FROM commission_escrow_operations o
+                WHERE o.commission_id = c.id AND o.operation = 'refund' AND o.state = 'confirmed') AS refund_atomic
          FROM surety_policies p JOIN commissions c ON c.id = p.commission_id
         WHERE p.state = 'active' AND (
           c.status IN ('complete', 'refunded') OR (c.status = 'open' AND c.deadline_at <= now())
@@ -115,13 +118,22 @@ export async function reconcileSuretyPolicies(limit = 50) {
         continue;
       }
       if (row.commission_status === "refunded" && row.tribunal_outcome === "client") {
-        await db.query("UPDATE surety_policies SET state = 'claim_pending', updated_at = now() WHERE id = $1", [row.id]);
-        await db.query(
-          `INSERT INTO surety_pool_operations (kind, reference_id, destination_wallet, amount_atomic)
-           SELECT 'claim', p.id, p.client_wallet, p.coverage_atomic FROM surety_policies p WHERE p.id = $1
-           ON CONFLICT (kind, reference_id) DO NOTHING`, [row.id],
-        );
-        claims += 1;
+        const policy = await db.query<{ coverage_atomic: string }>("SELECT coverage_atomic::text FROM surety_policies WHERE id = $1", [row.id]);
+        const coverage = BigInt(policy.rows[0].coverage_atomic);
+        const refund = BigInt(row.refund_atomic ?? "0");
+        const claim = coverage > refund ? coverage - refund : 0n;
+        if (claim > 0n) {
+          await db.query("UPDATE surety_policies SET state = 'claim_pending', updated_at = now() WHERE id = $1", [row.id]);
+          await db.query(
+            `INSERT INTO surety_pool_operations (kind, reference_id, destination_wallet, amount_atomic)
+             VALUES ('claim', $1, $2, $3) ON CONFLICT (kind, reference_id) DO NOTHING`,
+            [row.id, row.client_wallet, claim.toString()],
+          );
+          claims += 1;
+        } else {
+          await db.query("UPDATE surety_policies SET state = 'released', updated_at = now() WHERE id = $1", [row.id]);
+          released += 1;
+        }
       } else {
         await db.query("UPDATE surety_policies SET state = 'released', updated_at = now() WHERE id = $1", [row.id]);
         released += 1;
@@ -329,16 +341,13 @@ export async function reconcileSuretyPool(limit = 25) {
     const poolLock = await db.query<{ acquired: boolean }>("SELECT pg_try_advisory_lock(hashtext('guildhall-surety-pool')) AS acquired");
     if (!poolLock.rows[0]?.acquired) return result;
     poolLocked = true;
-    const pendingDeposit = await db.query("SELECT 1 FROM surety_pool_deposits WHERE state = 'awaiting' LIMIT 1");
-    if (!pendingDeposit.rowCount) {
-      const withdrawals = await db.query("SELECT 1 FROM surety_pool_operations WHERE kind = 'withdrawal' AND state IN ('submitted', 'outcome_unknown') LIMIT 1");
-      if (!withdrawals.rowCount) await prepareNextWithdrawal(db);
-    }
+    const withdrawals = await db.query("SELECT 1 FROM surety_pool_operations WHERE kind = 'withdrawal' AND state IN ('submitted', 'outcome_unknown') LIMIT 1");
+    if (!withdrawals.rowCount) await prepareNextWithdrawal(db);
     const due = await db.query<{ id: string }>(
       `SELECT id FROM surety_pool_operations
-        WHERE state IN ('queued', 'submitted', 'failed', 'outcome_unknown') AND ($2::boolean = false OR state IN ('submitted', 'outcome_unknown'))
+        WHERE state IN ('queued', 'submitted', 'failed', 'outcome_unknown')
         ORDER BY CASE kind WHEN 'claim' THEN 0 WHEN 'premium_refund' THEN 1 WHEN 'premium_fee' THEN 2 ELSE 3 END, created_at
-        LIMIT $1`, [limit, Boolean(pendingDeposit.rowCount)],
+        LIMIT $1`, [limit],
     );
     result.operations.examined = due.rows.length;
     for (const operation of due.rows) {

@@ -21,6 +21,12 @@ export const suretyRouter = Router();
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
 const decimalAmount = z.string().regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,6})?$/);
 const uuid = z.string().uuid();
+const virtualPoolAssets = 1_000_000n;
+const virtualPoolShares = 1_000_000n;
+
+function quotePoolShares(amount: bigint, accounted: bigint, shares: bigint) {
+  return amount * (shares + virtualPoolShares) / (accounted + virtualPoolAssets);
+}
 
 function toAtomic(value: string) {
   const [whole, fraction = ""] = value.split(".");
@@ -126,12 +132,24 @@ suretyRouter.post("/pool/deposit-instructions", requireAuth, async (request, res
   try {
     await db.query("BEGIN");
     const vault = await ensureSuretyPool(db);
+    const sharesResult = await db.query<{ shares: string }>("SELECT COALESCE(sum(shares_atomic), 0)::text AS shares FROM surety_pool_share_accounts");
+    const quotedShares = quotePoolShares(amount, BigInt(vault.accounted_balance_atomic), BigInt(sharesResult.rows[0].shares));
     const queued = await db.query("SELECT 1 FROM surety_withdrawal_requests WHERE state IN ('queued', 'processing', 'failed') LIMIT 1");
     if (queued.rowCount) throw new ApiError(409, "surety_withdrawal_queue_active", "New pool deposits are paused while queued underwriter withdrawals are being paid.");
-    let row = (await db.query<{
+    let row: {
+      id: string; user_id: string; wallet_address: string; amount_atomic: string;
+      recent_blockhash: string; last_valid_block_height: string; unsigned_transaction: string;
+    } | undefined = (await db.query<{
       id: string; user_id: string; wallet_address: string; amount_atomic: string;
       recent_blockhash: string; last_valid_block_height: string; unsigned_transaction: string;
     }>("SELECT id, user_id, wallet_address, amount_atomic::text, recent_blockhash, last_valid_block_height::text, unsigned_transaction FROM surety_pool_deposits WHERE state = 'awaiting' FOR UPDATE")).rows[0];
+    const currentHeight = await connection.getBlockHeight(config.SOLANA_COMMITMENT);
+    if (row && currentHeight > Number(row.last_valid_block_height)) {
+      // Retire an expired request so it cannot reserve the pool's single
+      // awaiting slot. Its exact transaction can still be confirmed later.
+      await db.query("UPDATE surety_pool_deposits SET state = 'cancelled' WHERE id = $1", [row.id]);
+      row = undefined;
+    }
     if (row && (row.user_id !== request.auth!.userId || row.wallet_address !== request.auth!.walletAddress)) {
       throw new ApiError(409, "surety_deposit_pending", "Another underwriter has a deposit awaiting confirmation.");
     }
@@ -139,18 +157,15 @@ suretyRouter.post("/pool/deposit-instructions", requireAuth, async (request, res
     const sourceWallet = new PublicKey(request.auth!.walletAddress);
     const mint = new PublicKey(vault.asset_mint);
     const destinationWallet = new PublicKey(vault.wallet_public_key);
-    const currentHeight = await connection.getBlockHeight(config.SOLANA_COMMITMENT);
     if (row && currentHeight <= Number(row.last_valid_block_height)) {
       await db.query("COMMIT");
       response.json({ data: { depositId: row.id, amountAtomic: row.amount_atomic,
         unsignedTransaction: row.unsigned_transaction, lastValidBlockHeight: Number(row.last_valid_block_height),
-        poolWallet: vault.wallet_public_key, assetMint: vault.asset_mint } });
+        quotedSharesAtomic: quotedShares.toString(), poolWallet: vault.wallet_public_key, assetMint: vault.asset_mint } });
       return;
     }
-    const actualBalance = await suretyPoolBalance(vault);
-    if (row && actualBalance > BigInt(vault.accounted_balance_atomic)) {
-      throw new ApiError(409, "surety_deposit_needs_confirmation", `A previous pool deposit may have landed. Confirm its signature with depositId ${row.id} before requesting a replacement.`);
-    }
+    // A deposit whose blockhash expired cannot still be submitted. Unrelated
+    // donations to the vault must not let one abandoned request lock the pool.
     const latest = await connection.getLatestBlockhash(config.SOLANA_COMMITMENT);
     const source = getAssociatedTokenAddressSync(mint, sourceWallet);
     const destination = getAssociatedTokenAddressSync(mint, destinationWallet);
@@ -177,21 +192,24 @@ suretyRouter.post("/pool/deposit-instructions", requireAuth, async (request, res
     }
     await db.query("COMMIT");
     response.json({ data: { depositId: row.id, amountAtomic: amount.toString(), unsignedTransaction: unsigned,
-      lastValidBlockHeight: latest.lastValidBlockHeight, poolWallet: vault.wallet_public_key, assetMint: vault.asset_mint } });
+      quotedSharesAtomic: quotedShares.toString(), lastValidBlockHeight: latest.lastValidBlockHeight,
+      poolWallet: vault.wallet_public_key, assetMint: vault.asset_mint } });
   } catch (error) { await db.query("ROLLBACK"); throw error; }
   finally { db.release(); }
 });
 
 suretyRouter.post("/pool/deposit-confirm", requireAuth, async (request, response) => {
-  const input = z.object({ depositId: uuid, signature: z.string().min(80).max(100) }).parse(request.body);
+  const input = z.object({ depositId: uuid, signature: z.string().min(80).max(100),
+    minimumSharesAtomic: z.string().regex(/^(?:0|[1-9]\d{0,19})$/) }).parse(request.body);
   const db = await pool.connect();
   try {
     await db.query("BEGIN");
     await db.query("SELECT pg_advisory_xact_lock(hashtext('guildhall-surety-pool'))");
     const result = await db.query<{
       id: string; user_id: string; wallet_address: string; amount_atomic: string; state: string;
+      last_valid_block_height: string;
       transaction_signature: string | null; unsigned_transaction: string;
-    }>("SELECT id, user_id, wallet_address, amount_atomic::text, state, transaction_signature, unsigned_transaction FROM surety_pool_deposits WHERE id = $1 FOR UPDATE", [input.depositId]);
+    }>("SELECT id, user_id, wallet_address, amount_atomic::text, state, last_valid_block_height::text, transaction_signature, unsigned_transaction FROM surety_pool_deposits WHERE id = $1 FOR UPDATE", [input.depositId]);
     const deposit = result.rows[0];
     if (!deposit) throw new ApiError(404, "surety_deposit_not_found", "Surety pool deposit not found.");
     if (deposit.user_id !== request.auth!.userId || deposit.wallet_address !== request.auth!.walletAddress) throw new ApiError(403, "surety_deposit_forbidden", "Only the depositing wallet can confirm this Surety contribution.");
@@ -201,7 +219,10 @@ suretyRouter.post("/pool/deposit-confirm", requireAuth, async (request, response
       response.json({ data: { depositId: deposit.id, confirmed: true }, idempotentReplay: true });
       return;
     }
-    if (deposit.state !== "awaiting") throw new ApiError(409, "surety_deposit_closed", "This Surety deposit is no longer awaiting confirmation.");
+    if (deposit.state !== "awaiting" && deposit.state !== "cancelled") throw new ApiError(409, "surety_deposit_closed", "This Surety deposit is no longer awaiting confirmation.");
+    if (deposit.state === "cancelled" && await connection.getBlockHeight(config.SOLANA_COMMITMENT) <= Number(deposit.last_valid_block_height)) {
+      throw new ApiError(409, "surety_deposit_closed", "This Surety deposit was cancelled and its transaction remains valid; wait for the blockhash to expire.");
+    }
     await verifyPreparedTransaction(input.signature, deposit.unsigned_transaction, deposit.wallet_address);
     const poolRow = await loadSuretyPool();
     const actualBalance = await suretyPoolBalance(poolRow);
@@ -209,9 +230,14 @@ suretyRouter.post("/pool/deposit-confirm", requireAuth, async (request, response
     if (actualBalance < BigInt(poolRow.accounted_balance_atomic) + amount) throw new ApiError(409, "surety_pool_balance_unavailable", "The confirmed deposit is not reflected in the Surety pool balance yet.");
     const total = await db.query<{ shares: string }>("SELECT COALESCE(sum(shares_atomic), 0)::text AS shares FROM surety_pool_share_accounts");
     const totalShares = BigInt(total.rows[0].shares);
-    const navBefore = actualBalance - amount;
-    let shares = totalShares === 0n || navBefore === 0n ? amount : amount * totalShares / navBefore;
+    // Price shares from the ledger, not raw token balance: direct transfers to
+    // the vault are donations and must not change an underwriter's share price.
+    // Virtual assets/shares also make the initial price resistant to rounding
+    // manipulation when the pool has very few shares.
+    const accountedBefore = BigInt(poolRow.accounted_balance_atomic);
+    const shares = quotePoolShares(amount, accountedBefore, totalShares);
     if (shares === 0n) throw new ApiError(409, "surety_deposit_too_small", "This deposit is too small to mint a positive pool share balance.");
+    if (shares < BigInt(input.minimumSharesAtomic)) throw new ApiError(409, "surety_share_quote_moved", "The Surety pool share value moved below your minimum. Request a fresh deposit quote before confirming.");
     await db.query(
       `INSERT INTO surety_pool_share_accounts (user_id, shares_atomic) VALUES ($1, $2)
        ON CONFLICT (user_id) DO UPDATE SET shares_atomic = surety_pool_share_accounts.shares_atomic + EXCLUDED.shares_atomic, updated_at = now()`,
@@ -240,8 +266,6 @@ suretyRouter.delete("/pool/deposits/:depositId", requireAuth, async (request, re
     if (deposit.user_id !== request.auth!.userId || deposit.wallet_address !== request.auth!.walletAddress) throw new ApiError(403, "surety_deposit_forbidden", "Only the depositing wallet can cancel this Surety contribution.");
     if (deposit.state !== "awaiting") throw new ApiError(409, "surety_deposit_closed", "This Surety deposit is no longer awaiting confirmation.");
     if (await connection.getBlockHeight(config.SOLANA_COMMITMENT) <= Number(deposit.last_valid_block_height)) throw new ApiError(409, "surety_transaction_still_valid", "Wait for the deposit transaction to confirm or expire before cancelling it.");
-    const vault = await loadSuretyPool();
-    if (await suretyPoolBalance(vault) > BigInt(vault.accounted_balance_atomic)) throw new ApiError(409, "surety_deposit_needs_confirmation", "A deposit may have landed. Confirm its signature before cancelling it.");
     await db.query("UPDATE surety_pool_deposits SET state = 'cancelled' WHERE id = $1", [deposit.id]);
     await db.query("COMMIT");
     response.json({ data: { depositId, state: "cancelled" } });

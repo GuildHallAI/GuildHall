@@ -84,7 +84,8 @@ function createGuildhallMcpServer(session: { userId: string; walletAddress: stri
     description: "Prepare an unsigned stablecoin funding transaction for an open commission. The client wallet must sign and submit it.",
     inputSchema: z.object({ commissionId: z.string().uuid() }), annotations,
   }, async ({ commissionId }) => {
-    return textResult({ data: await getCommissionFundingInstructions(commissionId) });
+    if (!session) throw new ApiError(401, "unauthenticated", "Connect a wallet session before preparing commission funding.");
+    return textResult({ data: await getCommissionFundingInstructions(commissionId, session.userId) });
   });
 
   server.registerTool("search_bounties", {

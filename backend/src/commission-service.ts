@@ -29,6 +29,7 @@ export const commissionCreateInputSchema = z.object({
 
 type CommissionRow = {
   id: string;
+  client_user_id?: string;
   client_wallet: string;
   provider_wallet: string | null;
   requires_tribunal?: boolean;
@@ -211,35 +212,43 @@ export async function claimCommissionForWallet(
   }
 }
 
-export async function getCommissionFundingInstructions(commissionId: string) {
+export async function getCommissionFundingInstructions(commissionId: string, userId: string) {
+  const initial = await pool.query<CommissionRow>(
+    `SELECT c.*, w.public_key AS escrow_address FROM commissions c
+      LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id WHERE c.id = $1`, [commissionId],
+  );
+  const commission = initial.rows[0];
+  if (!commission) throw new ApiError(404, "commission_not_found", "Commission not found.");
+  if (commission.client_user_id !== userId) throw new ApiError(403, "commission_funding_forbidden", "Only the commission owner can prepare funding.");
+  if (commission.status !== "open") throw new ApiError(409, "commission_not_fundable", "This commission is no longer open for funding.");
+  const surety = await pool.query<{ state: string }>("SELECT state FROM surety_policies WHERE commission_id = $1", [commissionId]);
+  if (surety.rows[0]?.state === "awaiting_premium") throw new ApiError(409, "surety_premium_required", "Confirm or cancel this commission's Surety premium before funding it.");
+  if (!commission.escrow_address) throw new ApiError(409, "escrow_unavailable", "The commission escrow account is not ready.");
+  if (commission.deadline_at <= new Date()) throw new ApiError(409, "commission_expired", "The commission deadline has passed and the commission can no longer be funded.");
+  if (commission.funding_signature) throw new ApiError(409, "already_funded", "This commission already has a confirmed funding transaction.");
+  // RPC latency must not hold a database connection or commission row lock.
+  const latestBlockhash = await connection.getLatestBlockhash(config.SOLANA_COMMITMENT);
+  const escrow = new PublicKey(commission.escrow_address);
+  const mint = new PublicKey(commission.asset_mint);
+  const clientWallet = new PublicKey(commission.client_wallet);
+  const sourceTokenAccount = getAssociatedTokenAddressSync(mint, clientWallet);
+  const tokenAccount = getAssociatedTokenAddressSync(mint, escrow);
+  const transaction = new Transaction({ feePayer: clientWallet, recentBlockhash: latestBlockhash.blockhash }).add(
+    createAssociatedTokenAccountIdempotentInstruction(clientWallet, sourceTokenAccount, clientWallet, mint),
+    createAssociatedTokenAccountIdempotentInstruction(clientWallet, tokenAccount, escrow, mint),
+    createTransferCheckedInstruction(sourceTokenAccount, mint, tokenAccount, clientWallet,
+      BigInt(commission.amount_atomic), 6, [], TOKEN_PROGRAM_ID),
+  );
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const result = await client.query<CommissionRow>(
-      `SELECT c.*, w.public_key AS escrow_address
-         FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
-        WHERE c.id = $1 FOR UPDATE OF c`, [commissionId],
+    const locked = await client.query<{ status: string; funding_signature: string | null }>(
+      "SELECT status, funding_signature FROM commissions WHERE id = $1 AND client_user_id = $2 FOR UPDATE",
+      [commissionId, userId],
     );
-    const commission = result.rows[0];
-    if (!commission) throw new ApiError(404, "commission_not_found", "Commission not found.");
-    if (commission.status !== "open") throw new ApiError(409, "commission_not_fundable", "This commission is no longer open for funding.");
-    const surety = await client.query<{ state: string }>("SELECT state FROM surety_policies WHERE commission_id = $1", [commissionId]);
-    if (surety.rows[0]?.state === "awaiting_premium") throw new ApiError(409, "surety_premium_required", "Confirm or cancel this commission's Surety premium before funding it.");
-    if (!commission.escrow_address) throw new ApiError(409, "escrow_unavailable", "The commission escrow account is not ready.");
-    if (commission.deadline_at <= new Date()) throw new ApiError(409, "commission_expired", "The commission deadline has passed and the commission can no longer be funded.");
-    if (commission.funding_signature) throw new ApiError(409, "already_funded", "This commission already has a confirmed funding transaction.");
-    const escrow = new PublicKey(commission.escrow_address);
-    const mint = new PublicKey(commission.asset_mint);
-    const clientWallet = new PublicKey(commission.client_wallet);
-    const sourceTokenAccount = getAssociatedTokenAddressSync(mint, clientWallet);
-    const tokenAccount = getAssociatedTokenAddressSync(mint, escrow);
-    const latestBlockhash = await connection.getLatestBlockhash(config.SOLANA_COMMITMENT);
-    const transaction = new Transaction({ feePayer: clientWallet, recentBlockhash: latestBlockhash.blockhash }).add(
-      createAssociatedTokenAccountIdempotentInstruction(clientWallet, sourceTokenAccount, clientWallet, mint),
-      createAssociatedTokenAccountIdempotentInstruction(clientWallet, tokenAccount, escrow, mint),
-      createTransferCheckedInstruction(sourceTokenAccount, mint, tokenAccount, clientWallet,
-        BigInt(commission.amount_atomic), 6, [], TOKEN_PROGRAM_ID),
-    );
+    if (!locked.rows[0] || locked.rows[0].status !== "open" || locked.rows[0].funding_signature) {
+      throw new ApiError(409, "commission_not_fundable", "This commission is no longer open for funding.");
+    }
     await client.query(
       `UPDATE commissions
           SET funding_instructions_last_valid_block_height = GREATEST(

@@ -79,6 +79,10 @@ export async function withdrawEvaluatorStake(userId: string, idempotencyKey: str
       `SELECT 1 FROM evaluator_slash_operations WHERE evaluator_user_id = $1 AND state IN ('pending', 'submitted', 'outcome_unknown')
        UNION ALL
        SELECT 1 FROM tribunal_cases tc WHERE tc.warden_user_id = $1
+         AND NOT EXISTS (
+           SELECT 1 FROM evaluator_slash_operations so
+            WHERE so.case_id = tc.id AND so.evaluator_user_id = $1 AND so.state = 'confirmed'
+         )
          AND (tc.stage IN ('panel', 'bench') OR
               (tc.stage = 'decided' AND tc.panel_decided_at IS NOT NULL AND tc.outcome IS NOT NULL
                AND (CASE WHEN tc.warden_verdict = 'dismissed' THEN 'provider' ELSE tc.warden_verdict END)

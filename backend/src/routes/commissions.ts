@@ -179,9 +179,9 @@ router.get("/:id", async (request, response) => {
   response.json({ data: publicCommission(commission) });
 });
 
-router.get("/:id/funding-instructions", async (request, response) => {
+router.post("/:id/funding-instructions", requireAuth, async (request, response) => {
   const id = uuidSchema.parse(request.params.id);
-  response.json({ data: await getCommissionFundingInstructions(id) });
+  response.json({ data: await getCommissionFundingInstructions(id, request.auth!.userId) });
 });
 
 router.post("/:id/accept", requireAuth, async (request, response) => {
