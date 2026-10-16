@@ -71,6 +71,15 @@ type FundingInstructions = {
   unsignedTransaction: string; lastValidBlockHeight: number; termsHash?: string;
 };
 type PendingFunding = { signature: string; blockhash: string; lastValidBlockHeight: number; signedTransaction?: string };
+const fundingTransactionCanBeDiscarded = (error: unknown) => error instanceof GuildHallApiError
+  && ["funding_transaction_mismatch", "funding_transaction_expired", "funding_transaction_failed"].includes(error.code ?? "");
+const fundingDiscardMessage = (error: unknown) => {
+  if (!(error instanceof GuildHallApiError)) return "";
+  if (error.code === "funding_transaction_mismatch") return "The signed transaction was rejected before submission. No funds were moved. Prepare and sign a fresh transaction.";
+  if (error.code === "funding_transaction_expired") return "The signed transaction expired before submission. No funds were moved. Prepare and sign a fresh transaction.";
+  if (error.code === "funding_transaction_failed") return "Solana rejected the funding transaction, so the token transfer did not complete. Prepare and sign a fresh transaction.";
+  return "";
+};
 const pendingFundingKey = (commissionId: string) => `guildhall:pending-funding:${commissionId}`;
 const transactionToBase64 = (transaction: Transaction) => {
   const bytes = transaction.serialize({ requireAllSignatures: true, verifySignatures: true });
@@ -341,15 +350,13 @@ function LiveWorkspace() {
       await recordFunding(commission, pending);
     } catch (cause) {
       console.error("[GuildHall] Commission funding failed:", cause);
-      if (cause instanceof GuildHallApiError && cause.code === "funding_transaction_mismatch") {
+      if (fundingTransactionCanBeDiscarded(cause)) {
         localStorage.removeItem(pendingFundingKey(commission.id));
         setPendingFunding(null);
       }
-      toast.error(cause instanceof GuildHallApiError && cause.code === "funding_transaction_mismatch"
-        ? "The signed transaction was rejected before submission. No funds were moved. Prepare and sign a fresh transaction."
-        : sentSignature
+      toast.error(fundingDiscardMessage(cause) || (sentSignature
           ? "Your transaction is signed. GuildHall may still be submitting it. Do not sign another funding transaction; use Check transaction confirmation to retry."
-          : (cause as Error).message || "Could not fund this commission.");
+          : (cause as Error).message || "Could not fund this commission."));
     } finally { fundingLock.current = false; setFundingBusy(false); }
   };
 
@@ -368,11 +375,11 @@ function LiveWorkspace() {
       await recordFunding(detail, pendingFunding);
     } catch (cause) {
       console.error("[GuildHall] Funding confirmation failed:", cause);
-      if (cause instanceof GuildHallApiError && cause.code === "funding_transaction_mismatch") {
+      if (fundingTransactionCanBeDiscarded(cause)) {
         localStorage.removeItem(pendingFundingKey(detail.id));
         setPendingFunding(null);
       }
-      toast.error((cause as Error).message || "The funding transaction is not confirmed yet.");
+      toast.error(fundingDiscardMessage(cause) || (cause as Error).message || "The funding transaction is not confirmed yet.");
     } finally { fundingLock.current = false; setFundingBusy(false); }
   };
 
