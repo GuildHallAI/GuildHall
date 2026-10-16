@@ -48,6 +48,9 @@ type CommissionRow = {
   accepted_at: Date | null;
   funding_signature: string | null;
   funded_at: Date | null;
+  funding_instructions_last_valid_block_height?: string | null;
+  funding_instructions_message_hash?: string | null;
+  funding_submission_signature?: string | null;
   created_at: Date;
   updated_at: Date;
   escrow_address?: string;
@@ -57,6 +60,33 @@ type CommissionRow = {
 };
 
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
+
+function buildCommissionFundingTransaction(commission: CommissionRow, blockhash: string) {
+  const escrow = new PublicKey(commission.escrow_address!);
+  const mint = new PublicKey(commission.asset_mint);
+  const clientWallet = new PublicKey(commission.client_wallet);
+  const sourceTokenAccount = getAssociatedTokenAddressSync(mint, clientWallet);
+  const tokenAccount = getAssociatedTokenAddressSync(mint, escrow);
+  const termsHash = commissionTermsHash(commission);
+  const transaction = new Transaction({ feePayer: clientWallet, recentBlockhash: blockhash }).add(
+    createAssociatedTokenAccountIdempotentInstruction(clientWallet, sourceTokenAccount, clientWallet, mint),
+    createAssociatedTokenAccountIdempotentInstruction(clientWallet, tokenAccount, escrow, mint),
+    createTransferCheckedInstruction(sourceTokenAccount, mint, tokenAccount, clientWallet,
+      BigInt(commission.amount_atomic), 6, [], TOKEN_PROGRAM_ID),
+    termsMemoInstruction(termsHash, clientWallet),
+  );
+  return { transaction, sourceTokenAccount, tokenAccount, termsHash };
+}
+
+export function commissionFundingMessageHash(transaction: Transaction) {
+  return createHash("sha256").update(transaction.serializeMessage()).digest("hex");
+}
+
+export function commissionFundingMessageMatches(transaction: Transaction, commission: CommissionRow) {
+  if (!commission.escrow_address || !transaction.recentBlockhash) return false;
+  const expected = buildCommissionFundingTransaction(commission, transaction.recentBlockhash).transaction;
+  return Buffer.from(transaction.serializeMessage()).equals(Buffer.from(expected.serializeMessage()));
+}
 
 export function publicCommission(row: CommissionRow) {
   return {
@@ -232,21 +262,28 @@ export async function getCommissionFundingInstructions(commissionId: string, use
   if (!commission.escrow_address) throw new ApiError(409, "escrow_unavailable", "The commission escrow account is not ready.");
   if (commission.deadline_at <= new Date()) throw new ApiError(409, "commission_expired", "The commission deadline has passed and the commission can no longer be funded.");
   if (commission.funding_signature) throw new ApiError(409, "already_funded", "This commission already has a confirmed funding transaction.");
+  if (commission.funding_submission_signature) {
+    const signature = commission.funding_submission_signature;
+    const [{ value: status }, currentBlockHeight] = await Promise.all([
+      connection.getSignatureStatuses([signature], { searchTransactionHistory: true }),
+      connection.getBlockHeight(config.SOLANA_COMMITMENT),
+    ]);
+    const lastValidHeight = Number(commission.funding_instructions_last_valid_block_height ?? 0);
+    if (status[0] && !status[0].err) {
+      throw new ApiError(409, "funding_pending_confirmation", "The signed funding transaction has reached Solana. Check its confirmation before preparing another.");
+    }
+    if (!status[0] && currentBlockHeight <= lastValidHeight) {
+      throw new ApiError(409, "funding_submission_pending", "A signed funding transaction is still valid. Check its confirmation before preparing another.");
+    }
+    await pool.query(
+      `UPDATE commissions SET funding_submission_signature=NULL, funding_instructions_message_hash=NULL
+        WHERE id=$1 AND funding_submission_signature=$2 AND status='open'`, [commissionId, signature],
+    );
+  }
   // RPC latency must not hold a database connection or commission row lock.
   const latestBlockhash = await connection.getLatestBlockhash(config.SOLANA_COMMITMENT);
-  const escrow = new PublicKey(commission.escrow_address);
-  const mint = new PublicKey(commission.asset_mint);
-  const clientWallet = new PublicKey(commission.client_wallet);
-  const sourceTokenAccount = getAssociatedTokenAddressSync(mint, clientWallet);
-  const tokenAccount = getAssociatedTokenAddressSync(mint, escrow);
-  const termsHash = commissionTermsHash(commission);
-  const transaction = new Transaction({ feePayer: clientWallet, recentBlockhash: latestBlockhash.blockhash }).add(
-    createAssociatedTokenAccountIdempotentInstruction(clientWallet, sourceTokenAccount, clientWallet, mint),
-    createAssociatedTokenAccountIdempotentInstruction(clientWallet, tokenAccount, escrow, mint),
-    createTransferCheckedInstruction(sourceTokenAccount, mint, tokenAccount, clientWallet,
-      BigInt(commission.amount_atomic), 6, [], TOKEN_PROGRAM_ID),
-    termsMemoInstruction(termsHash, clientWallet),
-  );
+  const { transaction, sourceTokenAccount, tokenAccount, termsHash } = buildCommissionFundingTransaction(commission, latestBlockhash.blockhash);
+  const messageHash = commissionFundingMessageHash(transaction);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -259,14 +296,15 @@ export async function getCommissionFundingInstructions(commissionId: string, use
     }
     await client.query(
       `UPDATE commissions
-          SET funding_instructions_last_valid_block_height = GREATEST(
-            COALESCE(funding_instructions_last_valid_block_height, 0), $2::bigint)
-        WHERE id = $1`, [commissionId, latestBlockhash.lastValidBlockHeight],
+          SET funding_instructions_last_valid_block_height = $2::bigint,
+              funding_instructions_message_hash = $3,
+              funding_submission_signature = NULL
+        WHERE id = $1`, [commissionId, latestBlockhash.lastValidBlockHeight, messageHash],
     );
     await client.query("COMMIT");
     return { commissionId, cluster: config.SOLANA_CLUSTER, assetMint: commission.asset_mint,
       sourceTokenAccount: sourceTokenAccount.toBase58(), tokenAccount: tokenAccount.toBase58(),
-      escrowOwner: escrow.toBase58(), amountAtomic: commission.amount_atomic, decimals: 6,
+      escrowOwner: commission.escrow_address!, amountAtomic: commission.amount_atomic, decimals: 6,
       clientWallet: commission.client_wallet, termsHash,
       unsignedTransaction: transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"),
       lastValidBlockHeight: latestBlockhash.lastValidBlockHeight };

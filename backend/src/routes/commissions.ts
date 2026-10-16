@@ -1,6 +1,6 @@
 import express, { Router } from "express";
 import { z } from "zod";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import bs58 from "bs58";
 import { requireAuth } from "../auth.js";
@@ -11,7 +11,7 @@ import { ApiError } from "../http.js";
 import { decryptPrivateData } from "../private-data.js";
 import { openTribunalCase } from "../tribunal.js";
 import { evidenceItemSchema, submitCommissionWork } from "../commission-work.js";
-import { claimCommissionForWallet, createCommissionForWallet, getCommissionFundingInstructions, publicCommission } from "../commission-service.js";
+import { claimCommissionForWallet, commissionFundingMessageHash, commissionFundingMessageMatches, createCommissionForWallet, getCommissionFundingInstructions, publicCommission } from "../commission-service.js";
 import { reviewCommissionSubmission } from "../commission-review.js";
 import { discardStagedCommissionImage, stageCommissionImage } from "../commission-assets.js";
 import { readCommissionImage } from "../cloudinary-assets.js";
@@ -196,6 +196,99 @@ router.post("/:id/funding-instructions", requireAuth, async (request, response) 
   response.json({ data: await getCommissionFundingInstructions(id, request.auth!.userId) });
 });
 
+router.post("/:id/funding/submit", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const { signedTransaction } = z.object({
+    signedTransaction: z.string().min(1).max(2_000).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+  }).parse(request.body);
+  const rawTransaction = Buffer.from(signedTransaction, "base64");
+  if (!rawTransaction.length || rawTransaction.length > 1_232 || rawTransaction.toString("base64") !== signedTransaction) {
+    throw new ApiError(400, "invalid_funding_transaction", "The signed funding transaction is malformed or too large.");
+  }
+
+  let transaction: Transaction;
+  try { transaction = Transaction.from(rawTransaction); }
+  catch { throw new ApiError(400, "invalid_funding_transaction", "The signed funding transaction could not be decoded."); }
+  if (!transaction.recentBlockhash || !transaction.feePayer || transaction.signatures.length !== 1
+    || !transaction.verifySignatures()) {
+    throw new ApiError(422, "invalid_funding_signature", "The funding transaction must contain a valid signature from its client wallet.");
+  }
+  const signatureEntry = transaction.signatures[0];
+  if (!signatureEntry.signature) throw new ApiError(422, "invalid_funding_signature", "The signed funding transaction is missing its wallet signature.");
+  const signature = bs58.encode(signatureEntry.signature);
+  const messageHash = commissionFundingMessageHash(transaction);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const selected = await client.query<CommissionRow & {
+      client_user_id: string; funding_instructions_message_hash: string | null;
+      funding_submission_signature: string | null; funding_instructions_last_valid_block_height: string | null;
+    }>(
+      `SELECT c.*, w.public_key AS escrow_address FROM commissions c
+        LEFT JOIN commission_escrow_wallets w ON w.commission_id=c.id
+       WHERE c.id=$1 FOR UPDATE OF c`, [id],
+    );
+    const commission = selected.rows[0];
+    if (!commission) throw new ApiError(404, "commission_not_found", "Commission not found.");
+    if (commission.client_user_id !== request.auth!.userId || commission.client_wallet !== request.auth!.walletAddress) {
+      throw new ApiError(403, "commission_funding_forbidden", "Only the commission owner can submit its funding transaction.");
+    }
+    if (commission.status !== "open" || commission.funding_signature) {
+      throw new ApiError(409, "commission_not_fundable", "This commission is no longer awaiting funding.");
+    }
+    if (!commission.escrow_address || !commission.funding_instructions_message_hash
+      || messageHash !== commission.funding_instructions_message_hash
+      || !commissionFundingMessageMatches(transaction, commission)) {
+      throw new ApiError(409, "funding_transaction_mismatch", "This signed transaction does not match the latest funding instructions. Refresh and sign the current transaction.");
+    }
+    if (!transaction.feePayer.equals(new PublicKey(commission.client_wallet))
+      || !signatureEntry.publicKey.equals(new PublicKey(commission.client_wallet))) {
+      throw new ApiError(422, "funding_wallet_mismatch", "The commission client wallet must sign and pay for this funding transaction.");
+    }
+    const surety = await client.query<{ state: string }>("SELECT state FROM surety_policies WHERE commission_id=$1", [id]);
+    if (surety.rows[0]?.state === "awaiting_premium") {
+      throw new ApiError(409, "surety_premium_required", "Confirm or cancel this commission's Surety premium before funding it.");
+    }
+    if (commission.funding_submission_signature && commission.funding_submission_signature !== signature) {
+      throw new ApiError(409, "funding_submission_pending", "Another signed funding transaction is already awaiting confirmation.");
+    }
+    await client.query("UPDATE commissions SET funding_submission_signature=$2 WHERE id=$1", [id, signature]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const existing = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+  const priorStatus = existing.value[0];
+  if (priorStatus?.err) throw new ApiError(422, "funding_transaction_failed", "This signed funding transaction failed on Solana. Wait for it to expire before preparing another.");
+  if (priorStatus) {
+    response.json({ data: { signature, submitted: true, alreadyObserved: true } });
+    return;
+  }
+  const valid = await connection.isBlockhashValid(transaction.recentBlockhash, { commitment: config.SOLANA_COMMITMENT });
+  if (!valid.value) throw new ApiError(409, "funding_transaction_expired", "This signed transaction has expired. Prepare fresh funding instructions and sign again.");
+  try {
+    const submittedSignature = await connection.sendRawTransaction(rawTransaction, {
+      skipPreflight: false,
+      preflightCommitment: config.SOLANA_COMMITMENT,
+      maxRetries: 3,
+    });
+    if (submittedSignature !== signature) throw new ApiError(502, "funding_signature_mismatch", "Solana returned a different transaction signature than the wallet signed.");
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const observed = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true }).catch(() => null);
+    if (!observed?.value[0]) {
+      console.error("[commission-funding] RPC submission failed", error);
+      throw new ApiError(502, "funding_relay_failed", "GuildHall could not confirm transaction submission. The signed transaction is saved; use Check transaction confirmation to retry safely.");
+    }
+    if (observed.value[0].err) throw new ApiError(422, "funding_transaction_failed", "The funding transaction failed on Solana.");
+  }
+  response.json({ data: { signature, submitted: true, alreadyObserved: false } });
+});
+
 router.post("/:id/accept", requireAuth, async (request, response) => {
   const id = uuidSchema.parse(request.params.id);
   response.json({ data: await claimCommissionForWallet(id, request.auth!) });
@@ -301,6 +394,7 @@ router.post("/:id/funding/confirm", async (request, response) => {
     const termsAnchored = transactionAnchorsTerms(parsed.transaction.message.instructions, termsHash);
     const updated = await client.query<CommissionRow>(
       `UPDATE commissions SET status = 'funded', funding_signature = $2,
+         funding_submission_signature = NULL, funding_instructions_message_hash = NULL,
          funded_at = now(), terms_hash = $3, terms_hashed_at = now(), terms_anchored = $4,
          updated_at = now() WHERE id = $1 RETURNING *`,
       [id, signature, termsHash, termsAnchored],

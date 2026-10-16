@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { Transaction } from "@solana/web3.js";
+import bs58 from "bs58";
 import Link from "./link";
 import { LayoutDashboard, ScrollText, Plus, RefreshCw, LoaderCircle, Clock, ShieldCheck, Search, Layers3 } from "./gothic-icon";
 import { Sidebar, SidebarProvider, SidebarHeader, SidebarContent, SidebarFooter, SidebarInset, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarGroup, SidebarGroupLabel, SidebarTrigger } from "@/components/ui/sidebar";
@@ -69,8 +70,12 @@ type FundingInstructions = {
   commissionId: string; cluster: string; assetMint: string; amountAtomic: string; clientWallet: string;
   unsignedTransaction: string; lastValidBlockHeight: number; termsHash?: string;
 };
-type PendingFunding = { signature: string; blockhash: string; lastValidBlockHeight: number };
+type PendingFunding = { signature: string; blockhash: string; lastValidBlockHeight: number; signedTransaction?: string };
 const pendingFundingKey = (commissionId: string) => `guildhall:pending-funding:${commissionId}`;
+const transactionToBase64 = (transaction: Transaction) => {
+  const bytes = transaction.serialize({ requireAllSignatures: true, verifySignatures: true });
+  return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
+};
 
 function readPendingFunding(commissionId: string): PendingFunding | null {
   try {
@@ -78,7 +83,8 @@ function readPendingFunding(commissionId: string): PendingFunding | null {
     if (!raw) return null;
     const pending = JSON.parse(raw) as Partial<PendingFunding>;
     if (typeof pending.signature !== "string" || typeof pending.blockhash !== "string"
-      || typeof pending.lastValidBlockHeight !== "number") return null;
+      || typeof pending.lastValidBlockHeight !== "number"
+      || (pending.signedTransaction !== undefined && typeof pending.signedTransaction !== "string")) return null;
     return pending as PendingFunding;
   } catch {
     return null;
@@ -124,8 +130,7 @@ export function LiveDashboard() {
 }
 
 function LiveWorkspace() {
-  const { connection } = useConnection();
-  const { connected: walletConnected, publicKey, sendTransaction } = useWallet();
+  const { connected: walletConnected, publicKey, signTransaction } = useWallet();
   const [tab, setTab] = useState("overview");
   const [session, setSession] = useState<WalletSession | null>(null);
   const [openJobs, setOpenJobs] = useState<ApiCommission[]>([]);
@@ -313,19 +318,28 @@ function LiveWorkspace() {
       const binary = atob(instructions.unsignedTransaction);
       const transaction = Transaction.from(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
       if (!transaction.recentBlockhash) throw new Error("The funding transaction has no recent blockhash. Refresh and try again.");
-      const signature = await sendTransaction(transaction, connection);
+      if (!signTransaction) throw new Error("The connected wallet cannot sign this funding transaction.");
+      const signedTransaction = await signTransaction(transaction);
+      if (!signedTransaction.signature) throw new Error("The wallet did not return a transaction signature.");
+      const signature = bs58.encode(signedTransaction.signature);
       sentSignature = signature;
-      const pending = { signature, blockhash: transaction.recentBlockhash, lastValidBlockHeight: instructions.lastValidBlockHeight };
+      const signedTransactionBase64 = transactionToBase64(signedTransaction);
+      const pending = { signature, blockhash: transaction.recentBlockhash, lastValidBlockHeight: instructions.lastValidBlockHeight, signedTransaction: signedTransactionBase64 };
       setPendingFunding({ commissionId: commission.id, ...pending });
       try { localStorage.setItem(pendingFundingKey(commission.id), JSON.stringify(pending)); } catch { /* Keep the in-memory retry available. */ }
       toast.info(instructions.termsHash
-        ? `Transaction sent with terms hash ${instructions.termsHash.slice(0, 10)}…. Waiting for Solana confirmation…`
-        : "Transaction sent. GuildHall is checking it on Solana…");
+        ? `Transaction signed with terms hash ${instructions.termsHash.slice(0, 10)}…. GuildHall is submitting it to Solana…`
+        : "Transaction signed. GuildHall is submitting it to Solana…");
+      const submitted = await guildhallApi<{ signature: string }>(`/commissions/${commission.id}/funding/submit`, {
+        method: "POST",
+        body: JSON.stringify({ signedTransaction: signedTransactionBase64 }),
+      });
+      if (submitted.signature !== signature) throw new Error("GuildHall returned a different signature for the signed transaction.");
       await recordFunding(commission, pending);
     } catch (cause) {
       console.error("[GuildHall] Commission funding failed:", cause);
       toast.error(sentSignature
-        ? "Your transaction was sent. GuildHall has not finished verifying it. Do not fund again; use Check transaction confirmation to retry."
+        ? "Your transaction is signed. GuildHall may still be submitting it. Do not sign another funding transaction; use Check transaction confirmation to retry."
         : (cause as Error).message || "Could not fund this commission.");
     } finally { setFundingBusy(false); }
   };
@@ -334,6 +348,12 @@ function LiveWorkspace() {
     if (!detail || !pendingFunding || pendingFunding.commissionId !== detail.id) return;
     setFundingBusy(true);
     try {
+      if (pendingFunding.signedTransaction) {
+        await guildhallApi<{ signature: string }>(`/commissions/${detail.id}/funding/submit`, {
+          method: "POST",
+          body: JSON.stringify({ signedTransaction: pendingFunding.signedTransaction }),
+        });
+      }
       await recordFunding(detail, pendingFunding);
     } catch (cause) {
       console.error("[GuildHall] Funding confirmation failed:", cause);
