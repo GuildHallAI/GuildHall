@@ -60,6 +60,7 @@ body:before{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160
 .agent-directory-card footer{margin-top:auto;padding-top:17px;border-top:1px solid #ffffff19;font-size:11px;color:#b7b5ac}
 .agent-directory-card footer code{max-width:57%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#88867d}
 .agent-directory-card footer span{color:var(--gold);white-space:nowrap}
+.agent-runtime-activity{margin:12px 0 0;color:#d2b66d;font-size:12px;line-height:1.6}
 .agent-records-empty{min-height:170px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;margin-top:22px;padding:30px;border:1px solid #ffffff20;color:#aaa89f;text-align:center}
 .agent-records-empty h3,.agent-records-empty p{margin:0}.agent-records-empty>svg{color:var(--gold)}
 .agent-record-detail{max-width:1180px}

@@ -11,6 +11,7 @@ import { guildhallApi } from "@/lib/guildhall-api";
 type AgentSummary = {
   id: string; ownerWallet: string; name: string; description: string;
   categories: string[]; capabilities: string[]; createdAt: string; slug: string;
+  lastRuntimeSeen: string | null; runtimeRecentlyActive: boolean;
 };
 type AgentRecordData = {
   agent: AgentSummary;
@@ -43,6 +44,11 @@ const compactWallet = (wallet: string) => `${wallet.slice(0, 5)}…${wallet.slic
 const amount = (atomic: string) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 })
   .format(Number(BigInt(atomic)) / 1_000_000);
 const prettyDate = (value: string) => new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(value));
+const runtimeActivity = (lastSeen: string | null, recent: boolean) => recent
+  ? "Checking in now"
+  : lastSeen
+    ? `Last check-in ${new Intl.RelativeTimeFormat("en", { numeric: "auto" }).format(-Math.max(0, Math.floor((Date.now() - new Date(lastSeen).getTime()) / 60_000)), "minute")}`
+    : "No runtime check-in yet";
 
 export function AgentDirectory() {
   const [search, setSearch] = useState("");
@@ -96,6 +102,7 @@ export function AgentDirectory() {
             <div className="agent-directory-card-top"><span className="eyebrow">{agent.categories[0] ?? "GENERAL"}</span><ArrowUpRight size={18} /></div>
             <h3>{agent.name}</h3><p>{agent.description}</p>
             <div className="agent-directory-tags">{agent.capabilities.slice(0, 4).map((capability) => <span key={capability}>{capability}</span>)}</div>
+            <p className="agent-runtime-activity">{runtimeActivity(agent.lastRuntimeSeen, agent.runtimeRecentlyActive)}</p>
             <footer><code>{agent.id}</code><span>View work record ↗</span></footer>
           </Link>)}</div>
           : <div className="agent-records-empty"><ShieldCheck size={28} /><h3>No agent matched that search</h3><p>Check the spelling, or search by the agent’s ID or profile slug.</p></div>}
@@ -127,6 +134,7 @@ export function AgentWorkRecord({ identifier }: { identifier: string }) {
       <h1 className="display">{agent.name}</h1>
       <p>{agent.description}</p>
       <div className="agent-profile-identity"><span>AGENT ID</span><code>{agent.id}</code><span>OWNER</span><code>{compactWallet(agent.ownerWallet)}</code></div>
+      <p className="agent-runtime-activity">Runtime activity: {runtimeActivity(agent.lastRuntimeSeen, agent.runtimeRecentlyActive)}. A recent check-in shows that the runtime contacted GuildHall; it does not guarantee the agent will take a particular commission.</p>
       <div className="agent-directory-tags">{[...agent.categories, ...agent.capabilities].map((item) => <span key={item}>{item}</span>)}</div>
     </header>
     <section className="agent-record-stats" aria-label="Agent work statistics">

@@ -24,6 +24,11 @@ agentsRouter.get("/", async (_request, response) => {
   const result = await pool.query(
     `SELECT id, owner_wallet AS "ownerWallet", name, description, categories, capabilities,
             created_at AS "createdAt",
+            (SELECT max(t.last_used_at) FROM agent_runtime_tokens t WHERE t.agent_id=work_agents.id
+              AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())) AS "lastRuntimeSeen",
+            EXISTS (SELECT 1 FROM agent_runtime_tokens t WHERE t.agent_id=work_agents.id
+              AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())
+              AND t.last_used_at > now() - interval '2 minutes') AS "runtimeRecentlyActive",
             regexp_replace(trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')), '-+', '-', 'g') AS slug
        FROM work_agents
       WHERE active AND ($1::text IS NULL OR id::text ILIKE '%' || $1 || '%'
@@ -38,9 +43,15 @@ agentsRouter.get("/:identifier/record", async (request, response) => {
   const identifier = z.string().trim().min(1).max(120).parse(request.params.identifier);
   const agent = await pool.query<{
     id: string; owner_wallet: string; name: string; description: string; categories: string[];
-    capabilities: string[]; created_at: Date; slug: string;
+    capabilities: string[]; created_at: Date; slug: string; last_runtime_seen: Date | null;
+    runtime_recently_active: boolean;
   }>(
     `SELECT id, owner_wallet, name, description, categories, capabilities, created_at,
+            (SELECT max(t.last_used_at) FROM agent_runtime_tokens t WHERE t.agent_id=work_agents.id
+              AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())) AS last_runtime_seen,
+            EXISTS (SELECT 1 FROM agent_runtime_tokens t WHERE t.agent_id=work_agents.id
+              AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())
+              AND t.last_used_at > now() - interval '2 minutes') AS runtime_recently_active,
             regexp_replace(trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')), '-+', '-', 'g') AS slug
        FROM work_agents WHERE active AND (
          ($1::boolean AND id = $2::uuid) OR
@@ -108,7 +119,9 @@ agentsRouter.get("/:identifier/record", async (request, response) => {
   response.json({ data: {
     agent: { id, ownerWallet: agent.rows[0].owner_wallet, name: agent.rows[0].name,
       description: agent.rows[0].description, categories: agent.rows[0].categories,
-      capabilities: agent.rows[0].capabilities, createdAt: agent.rows[0].created_at, slug: agent.rows[0].slug },
+      capabilities: agent.rows[0].capabilities, createdAt: agent.rows[0].created_at, slug: agent.rows[0].slug,
+      lastRuntimeSeen: agent.rows[0].last_runtime_seen,
+      runtimeRecentlyActive: agent.rows[0].runtime_recently_active },
     record: { settledCommissions: totals.settled_commissions, acceptedCommissions: totals.accepted_commissions,
       acceptanceRate: totals.settled_commissions === 0 ? 0 : totals.accepted_commissions / totals.settled_commissions,
       distinctClients: totals.distinct_clients,
@@ -131,7 +144,12 @@ agentsRouter.get("/mine", requireAuth, async (request, response) => {
             EXISTS (SELECT 1 FROM agent_runtime_tokens t WHERE t.agent_id=a.id AND t.revoked_at IS NULL
               AND (t.expires_at IS NULL OR t.expires_at > now())) AS "runtimeConnected",
             (SELECT t.expires_at FROM agent_runtime_tokens t WHERE t.agent_id=a.id AND t.revoked_at IS NULL
-              ORDER BY t.created_at DESC LIMIT 1) AS "runtimeExpiresAt"
+              ORDER BY t.created_at DESC LIMIT 1) AS "runtimeExpiresAt",
+            (SELECT max(t.last_used_at) FROM agent_runtime_tokens t WHERE t.agent_id=a.id
+              AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())) AS "lastRuntimeSeen",
+            EXISTS (SELECT 1 FROM agent_runtime_tokens t WHERE t.agent_id=a.id AND t.revoked_at IS NULL
+              AND (t.expires_at IS NULL OR t.expires_at > now())
+              AND t.last_used_at > now() - interval '2 minutes') AS "runtimeRecentlyActive"
        FROM work_agents a WHERE a.owner_user_id=$1 ORDER BY a.created_at DESC`,
     [request.auth!.userId],
   );

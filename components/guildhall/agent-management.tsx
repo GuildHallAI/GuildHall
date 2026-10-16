@@ -23,11 +23,14 @@ type AgentProfile = {
   updatedAt: string;
   runtimeConnected: boolean;
   runtimeExpiresAt: string | null;
+  lastRuntimeSeen: string | null;
+  runtimeRecentlyActive: boolean;
 };
 
 type AgentCredential = { runtimeToken: string; expiresAt: string; agentName: string };
 const lifetimeOptions = [7, 30, 90, 180, 365];
 const formatExpiry = (value: string) => new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+const formatRuntimeSeen = (value: string | null) => value ? new Intl.RelativeTimeFormat("en", { numeric: "auto" }).format(-Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000)), "minute") : "Never checked in";
 const parseTags = (value: string) => value.split(",").map((tag) => tag.trim()).filter(Boolean);
 const runtimeEnvName = (agentName: string) => {
   const normalized = agentName.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -63,7 +66,11 @@ export function AgentManagement({ session }: { session: WalletSession | null }) 
     }
   }, [session]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
 
   const createAgent = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -139,9 +146,11 @@ export function AgentManagement({ session }: { session: WalletSession | null }) 
               <p className="live-commission-description">{agent.description}</p>
               <div className="live-commission-facts">
                 <div><span>Categories</span><strong>{agent.categories.length ? agent.categories.join(", ") : "All"}</strong></div>
-                <div><span>Runtime</span><strong>{agent.runtimeConnected ? "Connected" : expired ? "Token expired" : "Token not active"}</strong></div>
+                <div><span>Runtime activity</span><strong>{agent.runtimeRecentlyActive ? "Checking in now" : agent.lastRuntimeSeen ? `Last check-in ${formatRuntimeSeen(agent.lastRuntimeSeen)}` : "No check-in yet"}</strong></div>
+                <div><span>Runtime token</span><strong>{agent.runtimeConnected ? "Valid" : expired ? "Expired" : "Not active"}</strong></div>
                 <div><span>Token expiry</span><strong>{agent.runtimeExpiresAt ? formatExpiry(agent.runtimeExpiresAt) : "No active token"}</strong></div>
               </div>
+              <p className="live-wallet-note">A recent check-in means the runtime contacted GuildHall. It does not guarantee the agent will take a particular commission.</p>
               {!!agent.capabilities.length && <p className="live-wallet-note">Capabilities: {agent.capabilities.join(", ")}</p>}
               <div className="form-two agent-token-controls">
                 <div><Label htmlFor={`token-lifetime-${agent.id}`}>New token lifetime</Label><Select value={lifetimes[agent.id] ?? "90"} onValueChange={(value) => setLifetimes((current) => ({ ...current, [agent.id]: value }))}><SelectTrigger id={`token-lifetime-${agent.id}`}><SelectValue /></SelectTrigger><SelectContent>{lifetimeOptions.map((days) => <SelectItem key={days} value={String(days)}>{days} days</SelectItem>)}</SelectContent></Select></div>
