@@ -33,6 +33,22 @@ const statusLabel: Record<string, string> = {
   open: "Open", funded: "Funded", submitted: "Submitted", approved: "Settling", disputed: "In Tribunal",
   complete: "Complete", refunded: "Refunded", cancelled: "Taken down", expired: "Expired",
 };
+function activityLabel(type: string, details: Record<string, unknown>) {
+  switch (type) {
+    case "posted": return "Commission posted";
+    case "funded": return "Escrow funded on Solana";
+    case "accepted": return "Provider accepted the commission";
+    case "submitted": return `Work submitted${typeof details.revision === "number" ? ` · revision ${details.revision}` : ""}`;
+    case "accepted_for_payment": return "Submission accepted by the client";
+    case "changes_requested": return "Client requested changes";
+    case "disputed": return "Commission entered Tribunal review";
+    case "settling": return "Commission settlement is processing";
+    case "completed": return "Commission completed and paid";
+    case "refunded": return "Commission refunded";
+    case "cancelled": return "Commission taken down";
+    default: return "Commission status updated";
+  }
+}
 const amount = (atomic: string) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(Number(BigInt(atomic)) / 1_000_000);
 const shortWallet = (wallet: string) => `${wallet.slice(0, 5)}…${wallet.slice(-4)}`;
 const date = (value: string) => new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(value));
@@ -41,6 +57,7 @@ const localDateTime = (value: number) => {
   return local.toISOString().slice(0, 16);
 };
 type CommissionSubmission = { id: string; revision: number; submitted_at: string; summary: string; evidence: { kind: string; label: string; value: string }[] };
+type CommissionActivity = { id: string; type: string; details: Record<string, unknown>; createdAt: string };
 type FundingInstructions = {
   commissionId: string; cluster: string; assetMint: string; amountAtomic: string; clientWallet: string;
   unsignedTransaction: string; lastValidBlockHeight: number;
@@ -106,6 +123,9 @@ function LiveWorkspace() {
   const [form, setForm] = useState({ title: "", description: "", category: "development", amount: "25", asset: "USDC", deadline: localDateTime(Date.now() + 7 * 86_400_000), requiresTribunal: false, safe: false });
   const [submissions, setSubmissions] = useState<CommissionSubmission[]>([]);
   const [submissionsLoading, setSubmissionsLoading] = useState(false);
+  const [activity, setActivity] = useState<CommissionActivity[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState("");
   const [fundingBusy, setFundingBusy] = useState(false);
   const [pendingFunding, setPendingFunding] = useState<{ commissionId: string } & PendingFunding | null>(null);
   const [takeDownOpen, setTakeDownOpen] = useState(false);
@@ -132,20 +152,60 @@ function LiveWorkspace() {
 
   useEffect(() => {
     void refresh();
+    const refreshTimer = window.setInterval(() => void refresh(), 30_000);
     const onSession = (event: Event) => {
       setSession((event as CustomEvent<WalletSession | null>).detail);
       void refresh();
     };
     window.addEventListener("guildhall-session-change", onSession);
-    return () => window.removeEventListener("guildhall-session-change", onSession);
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("guildhall-session-change", onSession);
+    };
   }, [refresh]);
+
+  const loadActivity = useCallback(async (commissionId: string) => {
+    try {
+      const result = await guildhallApi<CommissionActivity[]>(`/commissions/${commissionId}/activity`);
+      setActivity(result);
+      setActivityError("");
+    } catch (cause) {
+      setActivityError((cause as Error).message || "Could not load commission activity.");
+    } finally {
+      setActivityLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!detail) return;
+    if (!session) {
+      setActivity([]);
+      setActivityLoading(false);
+      return;
+    }
+    setActivity([]);
+    setActivityError("");
+    setActivityLoading(true);
+    void loadActivity(detail.id);
+    const timer = window.setInterval(() => void loadActivity(detail.id), 30_000);
+    return () => window.clearInterval(timer);
+  }, [detail?.id, session?.userId, loadActivity]);
 
   const visibleOpen = useMemo(() => openJobs.filter((job) => `${job.title} ${job.description} ${job.category}`.toLowerCase().includes(search.toLowerCase())), [openJobs, search]);
   const activeMine = myJobs.filter((job) => !["complete", "refunded", "cancelled", "expired"].includes(job.status));
+  const needsAttention = myJobs.flatMap((job) => {
+    if (!session) return [];
+    if (session.walletAddress === job.clientWallet && job.status === "open") return [{ job, action: "Fund escrow" }];
+    if (session.walletAddress === job.clientWallet && job.status === "submitted") return [{ job, action: "Review submission" }];
+    if (session.walletAddress === job.providerWallet && job.status === "funded") return [{ job, action: "Submit work" }];
+    return [];
+  });
   const assetName = (commission: ApiCommission) => commission.assetMint === assets.USDT ? "USDT" : "USDC";
   const openCommission = async (commission: ApiCommission) => {
     setDetail(commission);
     setSubmissions([]);
+    setActivity([]);
+    setActivityError("");
     setSubmissionsLoading(commission.status === "submitted" && session?.walletAddress === commission.clientWallet);
     if (commission.status === "submitted" && session?.walletAddress === commission.clientWallet) {
       try {
@@ -324,7 +384,7 @@ function LiveWorkspace() {
         {!session && <div className="live-connect-banner"><div><strong>Connect a Solana wallet</strong><p>Wallet sign-in creates a GuildHall session. Your signing key stays in your wallet.</p></div><WalletSessionControl /></div>}
         {error && <div className="empty-state error-state"><ShieldCheck /><h2>The Hall could not load</h2><p>{error}</p><Button variant="outline" className="button" onClick={() => void refresh()}>Try again</Button></div>}
         {loading ? <div className="dashboard-loading"><LoaderCircle className="spin" /><p>Loading live commissions…</p></div> : !error && <>
-          {tab === "overview" && <><div className="metric-grid three"><div className="metric-card"><ScrollText /><span>Open commissions</span><strong>{openJobs.length}</strong><small>Available in the work board</small></div><div className="metric-card"><Clock /><span>My active work</span><strong>{activeMine.length}</strong><small>Awaiting funding, delivery, or review</small></div><div className="metric-card"><ShieldCheck /><span>Network</span><strong>{assets.cluster}</strong><small>Settlement asset mints configured by GuildHall</small></div></div><section className="dashboard-panel"><div className="panel-heading"><h2>Recently posted work</h2><button className="text-link" onClick={() => setSection("work")}>Browse all</button></div><div className="live-commission-grid">{openJobs.slice(0, 3).map((job) => <CommissionCard key={job.id} commission={job} onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!openJobs.length && <p className="live-empty">No open commissions have been posted yet.</p>}</div></section></>}
+          {tab === "overview" && <><div className="metric-grid three"><div className="metric-card"><ScrollText /><span>Open commissions</span><strong>{openJobs.length}</strong><small>Available in the work board</small></div><div className="metric-card"><Clock /><span>My active work</span><strong>{activeMine.length}</strong><small>Awaiting funding, delivery, or review</small></div><div className="metric-card"><ShieldCheck /><span>Network</span><strong>{assets.cluster}</strong><small>Settlement asset mints configured by GuildHall</small></div></div>{session && <section className="dashboard-panel activity-attention"><div className="panel-heading"><h2>Needs your attention</h2><span className="mono muted">UPDATES EVERY 30 SECONDS</span></div>{needsAttention.length ? <div className="attention-list">{needsAttention.slice(0, 6).map(({ job, action }) => <button className="attention-row" key={`${job.id}-${action}`} onClick={() => void openCommission(job)}><span><strong>{action}</strong><small>{job.title}</small></span><span className="attention-arrow">View →</span></button>)}</div> : <p className="live-empty">Nothing needs your attention right now.</p>}</section>}<section className="dashboard-panel"><div className="panel-heading"><h2>Recently posted work</h2><button className="text-link" onClick={() => setSection("work")}>Browse all</button></div><div className="live-commission-grid">{openJobs.slice(0, 3).map((job) => <CommissionCard key={job.id} commission={job} onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!openJobs.length && <p className="live-empty">No open commissions have been posted yet.</p>}</div></section></>}
           {tab === "work" && <section className="dashboard-panel"><div className="market-toolbar"><label className="search-field"><Search size={17} /><Input aria-label="Search commissions" placeholder="Search live work" value={search} onChange={(event) => setSearch(event.target.value)} /></label><span className="mono muted">{visibleOpen.length} OPEN</span></div><div className="live-commission-grid">{visibleOpen.map((job) => <CommissionCard key={job.id} commission={job} onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!visibleOpen.length && <p className="live-empty">No matching open commissions.</p>}</div></section>}
           {tab === "mine" && <section className="dashboard-panel"><div className="panel-heading"><h2>Wallet commission history</h2><span className="mono muted">{myJobs.length} RECORDS</span></div>{!session ? <p className="live-empty">Connect your wallet to see commissions you posted or accepted.</p> : <div className="live-commission-grid">{myJobs.map((job) => <CommissionCard key={job.id} commission={job} own onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!myJobs.length && <p className="live-empty">This wallet has no commissions yet.</p>}</div>}</section>}
           {tab === "agents" && <AgentManagement session={session} />}
@@ -343,7 +403,8 @@ function LiveWorkspace() {
       <label className="live-safety-confirm"><input type="checkbox" checked={form.safe} onChange={(event) => setForm({ ...form, safe: event.target.checked })} /><span>I confirm this task is lawful and safe, and follows GuildHall’s task rules.</span></label>
       <div className="form-actions"><Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy || !form.safe || !assets[form.asset as "USDC" | "USDT"]}>{busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}Post commission</Button></div>
     </form></DialogContent></Dialog>
-    <Sheet open={!!detail} onOpenChange={(open) => { if (!open) { setDetail(null); setAction(null); setSubmissions([]); } }}><SheetContent className="commission-sheet">{detail && <><span className="eyebrow">{detail.category} / {statusLabel[detail.status] ?? detail.status}</span><SheetTitle>{detail.title}</SheetTitle><SheetDescription>Commission · {amount(detail.amountAtomic)} {assetName(detail)} · due {date(detail.deadlineAt)}</SheetDescription><div className="detail-section"><h3>Work and acceptance criteria</h3><p>{detail.description}</p></div><div className="detail-section"><h3>Parties</h3><div className="mandate-row"><span>Client</span><b>{shortWallet(detail.clientWallet)}</b></div><div className="mandate-row"><span>Provider</span><b>{detail.providerAgentName ?? (detail.providerWallet ? shortWallet(detail.providerWallet) : "Unassigned")}</b></div><div className="mandate-row"><span>Escrow</span><b>{detail.escrowAddress ? shortWallet(detail.escrowAddress) : "Preparing"}</b></div><div className="mandate-row"><span>Funding</span><b>{detail.fundingSignature ? "Confirmed on Solana" : "Awaiting client funding"}</b></div></div>
+    <Sheet open={!!detail} onOpenChange={(open) => { if (!open) { setDetail(null); setAction(null); setSubmissions([]); setActivity([]); } }}><SheetContent className="commission-sheet">{detail && <><span className="eyebrow">{detail.category} / {statusLabel[detail.status] ?? detail.status}</span><SheetTitle>{detail.title}</SheetTitle><SheetDescription>Commission · {amount(detail.amountAtomic)} {assetName(detail)} · due {date(detail.deadlineAt)}</SheetDescription><div className="detail-section"><h3>Work and acceptance criteria</h3><p>{detail.description}</p></div><div className="detail-section"><h3>Parties</h3><div className="mandate-row"><span>Client</span><b>{shortWallet(detail.clientWallet)}</b></div><div className="mandate-row"><span>Provider</span><b>{detail.providerAgentName ?? (detail.providerWallet ? shortWallet(detail.providerWallet) : "Unassigned")}</b></div><div className="mandate-row"><span>Escrow</span><b>{detail.escrowAddress ? shortWallet(detail.escrowAddress) : "Preparing"}</b></div><div className="mandate-row"><span>Funding</span><b>{detail.fundingSignature ? "Confirmed on Solana" : "Awaiting client funding"}</b></div></div>
+      {session && <section className="detail-section commission-timeline"><h3>Commission activity</h3>{activityLoading && !activity.length ? <p className="micro-copy">Loading activity…</p> : activityError ? <p className="micro-copy">{activityError}</p> : activity.length ? <ol>{activity.map((event) => <li key={event.id}><span className="timeline-dot"/><div><strong>{activityLabel(event.type, event.details)}</strong><time>{new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(event.createdAt))}</time>{typeof event.details.signature === "string" && <a href={`https://explorer.solana.com/tx/${event.details.signature}?cluster=${assets.cluster}`} target="_blank" rel="noreferrer">View Solana transaction ↗</a>}</div></li>)}</ol> : <p className="micro-copy">No activity has been recorded yet.</p>}</section>}
       {session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <div className="detail-section live-submission">{submissionsLoading ? <p>Loading submitted work…</p> : latestSubmission ? <><h3>Submission · revision {latestSubmission.revision}</h3><MarkdownDeliverable value={latestSubmission.summary}/>{latestSubmission.evidence.map((item, index) => <div className="live-evidence" key={`${latestSubmission.id}-${index}`}><strong>{item.label || item.kind}</strong>{item.kind === "text" ? <MarkdownDeliverable value={item.value}/> : <span>{item.value}</span>}</div>)}</> : <p>Submission details are unavailable. Refresh and try again.</p>}</div>}
       {detail.status === "open" && session?.walletAddress === detail.clientWallet && <div className="detail-section live-funding-panel"><h3>Fund commission escrow</h3><p>This will ask your connected wallet to transfer exactly <strong>{amount(detail.amountAtomic)} {assetName(detail)}</strong> from your wallet to this commission’s escrow on <strong>{assets.cluster}</strong>. Review the amount and token in your wallet before approving.</p>{pendingFunding?.commissionId === detail.id ? <Button className="button button-gold" disabled={fundingBusy} onClick={() => void confirmPendingFunding()}>{fundingBusy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}Check transaction confirmation</Button> : <Button className="button button-gold" disabled={fundingBusy || !walletConnected || publicKey?.toBase58() !== detail.clientWallet} onClick={() => void fundCommission(detail)}>{fundingBusy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}Fund escrow with {assetName(detail)}</Button>}{(!walletConnected || publicKey?.toBase58() !== detail.clientWallet) && <p className="micro-copy">Connect the same wallet that posted this commission to continue.</p>}</div>}
       <div className="detail-actions">{session?.walletAddress === detail.providerWallet && detail.status === "funded" && <Button className="button button-gold" onClick={() => setAction("submit")}>Submit work</Button>}{session?.walletAddress === detail.clientWallet && detail.status === "submitted" && <Button className="button button-gold" disabled={submissionsLoading || !latestSubmission} onClick={() => setAction("review")}>Review submission</Button>}{detail.status === "open" && session?.walletAddress !== detail.clientWallet && <Button className="button button-gold" onClick={() => void acceptWork(detail)}>Accept work</Button>}{session?.walletAddress === detail.clientWallet && detail.status === "open" && <Button variant="outline" className="button" disabled={takingDown || fundingBusy || pendingFunding?.commissionId === detail.id} onClick={() => setTakeDownOpen(true)}>{takingDown ? <LoaderCircle className="spin" size={16} /> : null}Take down commission</Button>}{!session && <p className="micro-copy">Connect your wallet to claim work or manage this commission.</p>}</div>

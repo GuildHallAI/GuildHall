@@ -330,6 +330,22 @@ router.get("/:id/submissions", requireAuth, async (request, response) => {
   })) });
 });
 
+router.get("/:id/activity", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const member = await pool.query(
+    "SELECT 1 FROM commissions WHERE id = $1 AND (client_user_id = $2 OR provider_user_id = $2)",
+    [id, request.auth!.userId],
+  );
+  if (!member.rowCount) throw new ApiError(403, "commission_forbidden", "Only commission participants can view its activity.");
+  const result = await pool.query<{ id: string; event_type: string; details: Record<string, unknown>; created_at: Date }>(
+    `SELECT id, event_type, details, created_at FROM commission_activity
+      WHERE commission_id = $1 ORDER BY created_at DESC, id DESC LIMIT 100`, [id],
+  );
+  response.json({ data: result.rows.reverse().map((row) => ({
+    id: row.id.toString(), type: row.event_type, details: row.details, createdAt: row.created_at,
+  })) });
+});
+
 router.post("/:id/review", requireAuth, async (request, response) => {
   const id = uuidSchema.parse(request.params.id);
   const result = await reviewCommissionSubmission(id, request.auth!.userId, request.body);
