@@ -152,6 +152,13 @@ function LiveWorkspace() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [assetFilter, setAssetFilter] = useState("all");
+  const [minimumBudget, setMinimumBudget] = useState("");
+  const [maximumBudget, setMaximumBudget] = useState("");
+  const [deadlineFilter, setDeadlineFilter] = useState("all");
+  const [tribunalFilter, setTribunalFilter] = useState("all");
+  const [sortOpenJobs, setSortOpenJobs] = useState("newest");
   const [createOpen, setCreateOpen] = useState(false);
   const [detail, setDetail] = useState<ApiCommission | null>(null);
   const [action, setAction] = useState<"submit" | "review" | null>(null);
@@ -271,7 +278,38 @@ function LiveWorkspace() {
     return () => { cancelled = true; };
   }, [createOpen, form.category]);
 
-  const visibleOpen = useMemo(() => openJobs.filter((job) => `${job.title} ${job.description} ${job.category}`.toLowerCase().includes(search.toLowerCase())), [openJobs, search]);
+  const assetName = (commission: ApiCommission) => commission.assetMint === assets.USDT ? "USDT" : "USDC";
+  const categoryOptions = useMemo(() => [...new Set(openJobs.map((job) => job.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [openJobs]);
+  const visibleOpen = useMemo(() => {
+    const parseBudget = (value: string) => {
+      const normalized = value.trim();
+      if (!normalized) return null;
+      if (!/^\d+(?:\.\d{0,6})?$/.test(normalized)) return null;
+      const [whole, fraction = ""] = normalized.split(".");
+      return BigInt(whole) * BigInt(1_000_000) + BigInt((fraction + "000000").slice(0, 6));
+    };
+    const min = parseBudget(minimumBudget);
+    const max = parseBudget(maximumBudget);
+    const cutoff = deadlineFilter === "all" ? null : Date.now() + Number(deadlineFilter) * 86_400_000;
+    const matching = openJobs.filter((job) => {
+      if (!`${job.title} ${job.description} ${job.category}`.toLowerCase().includes(search.toLowerCase())) return false;
+      if (categoryFilter !== "all" && job.category !== categoryFilter) return false;
+      if (assetFilter !== "all" && assetName(job) !== assetFilter) return false;
+      const budget = BigInt(job.amountAtomic);
+      if (min !== null && budget < min) return false;
+      if (max !== null && budget > max) return false;
+      if (cutoff !== null && new Date(job.deadlineAt).getTime() > cutoff) return false;
+      if (tribunalFilter === "required" && !job.requiresTribunal) return false;
+      if (tribunalFilter === "optional" && job.requiresTribunal) return false;
+      return true;
+    });
+    return matching.sort((a, b) => {
+      if (sortOpenJobs === "payout") return BigInt(b.amountAtomic) > BigInt(a.amountAtomic) ? 1 : BigInt(b.amountAtomic) < BigInt(a.amountAtomic) ? -1 : 0;
+      if (sortOpenJobs === "deadline") return new Date(a.deadlineAt).getTime() - new Date(b.deadlineAt).getTime();
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+  }, [openJobs, search, categoryFilter, assetFilter, minimumBudget, maximumBudget, deadlineFilter, tribunalFilter, sortOpenJobs, assets.USDT]);
+  const filtersActive = search !== "" || categoryFilter !== "all" || assetFilter !== "all" || minimumBudget !== "" || maximumBudget !== "" || deadlineFilter !== "all" || tribunalFilter !== "all" || sortOpenJobs !== "newest";
   const activeMine = myJobs.filter((job) => !["complete", "refunded", "cancelled", "expired"].includes(job.status));
   const needsAttention = myJobs.flatMap((job) => {
     if (!session) return [];
@@ -280,7 +318,6 @@ function LiveWorkspace() {
     if (session.walletAddress === job.providerWallet && job.status === "funded") return [{ job, action: "Submit work" }];
     return [];
   });
-  const assetName = (commission: ApiCommission) => commission.assetMint === assets.USDT ? "USDT" : "USDC";
   const openCommission = async (commission: ApiCommission) => {
     setDetail(commission);
     setSubmissions([]);
@@ -513,7 +550,15 @@ function LiveWorkspace() {
         {error && <div className="empty-state error-state"><ShieldCheck /><h2>The Hall could not load</h2><p>{error}</p><Button variant="outline" className="button" onClick={() => void refresh()}>Try again</Button></div>}
         {loading ? <div className="dashboard-loading"><LoaderCircle className="spin" /><p>Loading live commissions…</p></div> : !error && <>
           {tab === "overview" && <><div className="metric-grid three"><div className="metric-card"><ScrollText /><span>Open commissions</span><strong>{openJobs.length}</strong><small>Available in the work board</small></div><div className="metric-card"><Clock /><span>My active work</span><strong>{activeMine.length}</strong><small>Awaiting funding, delivery, or review</small></div><div className="metric-card"><ShieldCheck /><span>Network</span><strong>{assets.cluster}</strong><small>Settlement asset mints configured by GuildHall</small></div></div>{session && <section className="dashboard-panel activity-attention"><div className="panel-heading"><h2>Needs your attention</h2><span className="mono muted">UPDATES EVERY 30 SECONDS</span></div>{needsAttention.length ? <div className="attention-list">{needsAttention.slice(0, 6).map(({ job, action }) => <button className="attention-row" key={`${job.id}-${action}`} onClick={() => void openCommission(job)}><span><strong>{action}</strong><small>{job.title}</small></span><span className="attention-arrow">View →</span></button>)}</div> : <p className="live-empty">Nothing needs your attention right now.</p>}</section>}<section className="dashboard-panel"><div className="panel-heading"><h2>Recently posted work</h2><button className="text-link" onClick={() => setSection("work")}>Browse all</button></div><div className="live-commission-grid">{openJobs.slice(0, 3).map((job) => <CommissionCard key={job.id} commission={job} onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!openJobs.length && <p className="live-empty">No open commissions have been posted yet.</p>}</div></section></>}
-          {tab === "work" && <section className="dashboard-panel"><div className="market-toolbar"><label className="search-field"><Search size={17} /><Input aria-label="Search commissions" placeholder="Search live work" value={search} onChange={(event) => setSearch(event.target.value)} /></label><span className="mono muted">{visibleOpen.length} OPEN</span></div><div className="live-commission-grid">{visibleOpen.map((job) => <CommissionCard key={job.id} commission={job} onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!visibleOpen.length && <p className="live-empty">No matching open commissions.</p>}</div></section>}
+          {tab === "work" && <section className="dashboard-panel"><div className="market-toolbar"><div className="market-search-row"><label className="search-field"><Search size={17} /><Input aria-label="Search commissions" placeholder="Search live work" value={search} onChange={(event) => setSearch(event.target.value)} /></label><span className="mono muted">{visibleOpen.length} / {openJobs.length} OPEN</span></div><div className="market-filters" aria-label="Filter open commissions">
+            <label className="market-filter"><span>Category</span><Select value={categoryFilter} onValueChange={setCategoryFilter}><SelectTrigger className="guild-select" aria-label="Filter by category"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All categories</SelectItem>{categoryOptions.map((category) => <SelectItem key={category} value={category}>{category}</SelectItem>)}</SelectContent></Select></label>
+            <label className="market-filter"><span>Token</span><Select value={assetFilter} onValueChange={setAssetFilter}><SelectTrigger className="guild-select" aria-label="Filter by token"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All tokens</SelectItem><SelectItem value="USDC">USDC</SelectItem><SelectItem value="USDT">USDT</SelectItem></SelectContent></Select></label>
+            <div className="market-filter"><span>Budget range · USD</span><div className="market-budget-range"><Input aria-label="Minimum payout" type="number" min="0" step="0.000001" placeholder="Min" value={minimumBudget} onChange={(event) => setMinimumBudget(event.target.value)} /><Input aria-label="Maximum payout" type="number" min="0" step="0.000001" placeholder="Max" value={maximumBudget} onChange={(event) => setMaximumBudget(event.target.value)} /></div></div>
+            <label className="market-filter"><span>Deadline</span><Select value={deadlineFilter} onValueChange={setDeadlineFilter}><SelectTrigger className="guild-select" aria-label="Filter by deadline"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Any deadline</SelectItem><SelectItem value="1">Due within 24 hours</SelectItem><SelectItem value="7">Due within 7 days</SelectItem><SelectItem value="30">Due within 30 days</SelectItem></SelectContent></Select></label>
+            <label className="market-filter"><span>Tribunal</span><Select value={tribunalFilter} onValueChange={setTribunalFilter}><SelectTrigger className="guild-select" aria-label="Filter by Tribunal requirement"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Any review path</SelectItem><SelectItem value="required">Tribunal required</SelectItem><SelectItem value="optional">No Tribunal required</SelectItem></SelectContent></Select></label>
+            <label className="market-filter"><span>Sort by</span><Select value={sortOpenJobs} onValueChange={setSortOpenJobs}><SelectTrigger className="guild-select" aria-label="Sort commissions"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="newest">Newest</SelectItem><SelectItem value="payout">Highest payout</SelectItem><SelectItem value="deadline">Soonest due</SelectItem></SelectContent></Select></label>
+            {filtersActive && <Button className="market-clear-filters" variant="ghost" onClick={() => { setSearch(""); setCategoryFilter("all"); setAssetFilter("all"); setMinimumBudget(""); setMaximumBudget(""); setDeadlineFilter("all"); setTribunalFilter("all"); setSortOpenJobs("newest"); }}>Clear filters</Button>}
+          </div></div><div className="live-commission-grid">{visibleOpen.map((job) => <CommissionCard key={job.id} commission={job} onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!visibleOpen.length && <p className="live-empty">No matching open commissions.</p>}</div></section>}
           {tab === "mine" && <section className="dashboard-panel"><div className="panel-heading"><h2>Wallet commission history</h2><span className="mono muted">{myJobs.length} RECORDS</span></div>{!session ? <p className="live-empty">Connect your wallet to see commissions you posted or accepted.</p> : <div className="live-commission-grid">{myJobs.map((job) => <CommissionCard key={job.id} commission={job} own onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!myJobs.length && <p className="live-empty">This wallet has no commissions yet.</p>}</div>}</section>}
           {tab === "agents" && <AgentManagement session={session} />}
         </>}
