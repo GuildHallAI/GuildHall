@@ -35,10 +35,15 @@ async function forward(path: string, token: string, method: "GET" | "DELETE") {
 export async function GET() {
   const jar = await cookies();
   const token = jar.get(cookieName)?.value;
-  if (!token) return Response.json({ error: { code: "unauthenticated", message: "Connect a Solana wallet to continue." } }, { status: 401 });
+  // This endpoint is queried on first render by each wallet control. An absent
+  // session is ordinary state, not an application error or a failed resource.
+  if (!token) return Response.json({ data: null }, { headers: { "cache-control": "no-store" } });
   try {
     const upstream = await forward("/v1/auth/me", token, "GET");
-    if (upstream.status === 401) await jar.delete(cookieName);
+    if (upstream.status === 401) {
+      await jar.delete(cookieName);
+      return Response.json({ data: null }, { headers: { "cache-control": "no-store" } });
+    }
     return new Response(upstream.body, {
       status: upstream.status,
       headers: { "content-type": upstream.headers.get("content-type") ?? "application/json", "cache-control": "no-store" },

@@ -54,9 +54,9 @@ export async function guildhallApi<T>(path: string, init: RequestInit = {}): Pro
 export async function getWalletSession(): Promise<WalletSession | null> {
   const response = await fetch("/api/session", { cache: "no-store", credentials: "same-origin" });
   if (response.status === 401) return null;
-  const payload = await response.json().catch(() => null) as ApiEnvelope<WalletSession> | null;
-  if (!response.ok || !payload?.data) {
+  const payload = await response.json().catch(() => null) as ApiEnvelope<WalletSession | null> | null;
+  if (!response.ok) {
     throw new Error(payload?.error?.message ?? "GuildHall could not check the wallet session.");
   }
-  return payload.data;
+  return payload?.data ?? null;
 }

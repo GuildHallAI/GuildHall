@@ -26,8 +26,12 @@ const hashSessionToken = (token: string) =>
     .update(token)
     .digest("hex");
 
+// SIWS accepts "mainnet", whereas Solana RPC configuration calls it
+// "mainnet-beta". Sending the RPC name makes Phantom reject the entire prompt.
+const siwsChainId = (cluster: typeof config.SOLANA_CLUSTER) => cluster === "mainnet-beta" ? "mainnet" : cluster;
+
 const messageFor = (wallet: string, nonce: string, issuedAt: Date, expiresAt: Date) =>
-  `${config.AUTH_DOMAIN} wants you to sign in with your Solana account:\n${wallet}\n\nSign in to GuildHall.\n\nURI: ${config.AUTH_URI}\nVersion: 1\nChain ID: ${config.SOLANA_CLUSTER}\nNonce: ${nonce}\nIssued At: ${issuedAt.toISOString()}\nExpiration Time: ${expiresAt.toISOString()}`;
+  `${config.AUTH_DOMAIN} wants you to sign in with your Solana account:\n${wallet}\n\nSign in to GuildHall.\n\nURI: ${config.AUTH_URI}\nVersion: 1\nChain ID: ${siwsChainId(config.SOLANA_CLUSTER)}\nNonce: ${nonce}\nIssued At: ${issuedAt.toISOString()}\nExpiration Time: ${expiresAt.toISOString()}`;
 
 const nonceInput = z.object({ walletAddress: z.string().min(32).max(44) });
 const verifyInput = z.object({
