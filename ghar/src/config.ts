@@ -22,8 +22,10 @@ const runtimeProfiles = new Map<string, string>();
 const hallScoutToken = process.env.GUILDHALL_AGENT_HALLSCOUT_RUNTIME_TOKEN?.trim()
   || process.env.GUILDHALL_AGENT_RUNTIME_TOKEN?.trim();
 const hallwrightToken = process.env.GUILDHALL_AGENT_HALLWRIGHT_RUNTIME_TOKEN?.trim();
+const hallWatchtowerToken = process.env.GUILDHALL_AGENT_HALLWATCHTOWER_RUNTIME_TOKEN?.trim();
 if (hallScoutToken) runtimeProfiles.set("hall-scout", hallScoutToken);
 if (hallwrightToken) runtimeProfiles.set("hallwright", hallwrightToken);
+if (hallWatchtowerToken) runtimeProfiles.set("hall-watchtower", hallWatchtowerToken);
 for (const [index, token] of (process.env.GUILDHALL_AGENT_RUNTIME_TOKENS ?? "").split(",").map((value) => value.trim()).filter(Boolean).entries()) {
   runtimeProfiles.set(`additional-${index + 1}`, token);
 }
@@ -35,7 +37,7 @@ for (const [name, token] of runtimeProfiles) {
   configuredProfiles.push({ name, token });
 }
 if (!configuredProfiles.length) {
-  throw new Error("Set GUILDHALL_AGENT_HALLSCOUT_RUNTIME_TOKEN, GUILDHALL_AGENT_HALLWRIGHT_RUNTIME_TOKEN, or the legacy GUILDHALL_AGENT_RUNTIME_TOKEN.");
+  throw new Error("Set at least one agent runtime token, such as GUILDHALL_AGENT_HALLSCOUT_RUNTIME_TOKEN, GUILDHALL_AGENT_HALLWRIGHT_RUNTIME_TOKEN, or GUILDHALL_AGENT_HALLWATCHTOWER_RUNTIME_TOKEN.");
 }
 
 export const config = {

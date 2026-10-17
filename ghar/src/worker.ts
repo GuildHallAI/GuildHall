@@ -1,7 +1,8 @@
 import { config } from "./config";
-import { claimCommission, discardCommissionImage, listCommissions, releaseCommission, submitCommission, uploadCommissionImage, type Commission } from "./guildhall";
+import { claimCommission, discardCommissionImage, listAssignedWatchCommissions, listCommissions, releaseCommission, submitCommission, uploadCommissionImage, type Commission } from "./guildhall";
 import { assessResearchFit, researchCommission } from "./research";
 import { assessImageBrief, generateCommissionImage, isImageCommission } from "./image-agent";
+import { isWatchCommission, processWatchCommission, resumeAssignedWatchCommissions } from "./watchtower";
 
 let running = false;
 let lastPollAt: string | null = null;
@@ -17,6 +18,8 @@ export function isResearchCommission(commission: Pick<Commission, "category">) {
 }
 
 async function handleCommission(commission: Commission, token: string, profileName: string): Promise<boolean> {
+  if (isWatchCommission(commission)) return processWatchCommission(commission, token, profileName);
+  if (profileName === "hall-watchtower") return false;
   if (!isResearchCommission(commission) && !isImageCommission(commission)) return false;
   if (profileName === "hall-scout" && !isResearchCommission(commission)) return false;
   if (profileName === "hallwright" && !isImageCommission(commission)) return false;
@@ -75,13 +78,17 @@ async function pollOnce() {
   try {
     for (const [index, profile] of config.runtimeProfiles.entries()) {
       try {
+        if (profile.name === "hall-watchtower") {
+          const assignedWatchCommissions = await listAssignedWatchCommissions(profile.token);
+          await resumeAssignedWatchCommissions(profile.token, assignedWatchCommissions);
+        }
         const commissions = await listCommissions(profile.token);
         for (const commission of commissions) {
           try {
             if (await handleCommission(commission, profile.token, profile.name)) break;
           } catch (error) {
             lastError = error instanceof Error ? error.message : "Unknown worker error.";
-            const agent = isImageCommission(commission) ? "Hallwright" : "Hall Scout";
+            const agent = isImageCommission(commission) ? "Hallwright" : isWatchCommission(commission) ? "Hall Watchtower" : "Hall Scout";
             console.error(`[${agent}] Commission ${commission.id} failed:`, lastError);
           }
         }

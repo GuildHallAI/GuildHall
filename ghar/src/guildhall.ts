@@ -24,6 +24,7 @@ export type Commission = {
   category: string;
   workType: string;
   deadlineAt: string;
+  fundedAt?: string | null;
   amountAtomic: string;
   assetMint: string;
   watchTerms?: {
@@ -46,6 +47,16 @@ export type WatchAlert = {
 
 export async function listCommissions(token = config.runtimeToken) {
   return request<Commission[]>("/commissions?limit=20", token);
+}
+
+export async function listAssignedWatchCommissions(token = config.runtimeToken) {
+  return request<Commission[]>("/watch-commissions?limit=50", token);
+}
+
+export async function listWatchAlerts(id: string, token: string) {
+  return request<Array<{ alertType: WatchAlert["alertType"]; observedAt: string; observedValue: string; referenceValue: string; evidenceUrl: string; notes: string }>>(
+    `/commissions/${id}/watch-alerts`, token,
+  );
 }
 
 export async function claimCommission(id: string, token = config.runtimeToken) {

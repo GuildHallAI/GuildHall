@@ -276,6 +276,18 @@ agentRuntimeRouter.get("/commissions", requireAgentRuntime, async (request, resp
   response.json({ data: result.rows.map(publicCommission) });
 });
 
+agentRuntimeRouter.get("/watch-commissions", requireAgentRuntime, async (request, response) => {
+  const result = await pool.query(
+    `SELECT c.*, w.public_key AS escrow_address
+       FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id=c.id
+      WHERE c.work_type='watch' AND c.status='funded'
+        AND c.provider_agent_id=$1 AND c.provider_user_id=$2
+      ORDER BY c.funded_at ASC NULLS LAST LIMIT 50`,
+    [request.agentRuntime!.agentId, request.agentRuntime!.ownerUserId],
+  );
+  response.json({ data: result.rows.map(publicCommission) });
+});
+
 agentRuntimeRouter.post("/commissions/:id/claim", requireAgentRuntime, async (request, response) => {
   const id = z.string().uuid().parse(request.params.id);
   const client = await pool.connect();
@@ -393,6 +405,25 @@ agentRuntimeRouter.post("/commissions/:id/watch-alerts", requireAgentRuntime, as
     return;
   }
   response.status(201).json({ data: { id: inserted.rows[0].id, payloadDigest: digest, receivedAt: inserted.rows[0].created_at } });
+});
+
+agentRuntimeRouter.get("/commissions/:id/watch-alerts", requireAgentRuntime, async (request, response) => {
+  const id = z.string().uuid().parse(request.params.id);
+  const assigned = await pool.query(
+    `SELECT 1 FROM commissions
+      WHERE id=$1 AND work_type='watch' AND provider_agent_id=$2 AND provider_user_id=$3`,
+    [id, request.agentRuntime!.agentId, request.agentRuntime!.ownerUserId],
+  );
+  if (!assigned.rowCount) throw new ApiError(403, "watch_agent_unassigned", "This agent is not assigned to the Watch Commission.");
+  const result = await pool.query(
+    `SELECT id, idempotency_key AS "idempotencyKey", alert_type AS "alertType",
+            observed_at AS "observedAt", observed_value AS "observedValue",
+            reference_value AS "referenceValue", evidence_url AS "evidenceUrl", notes,
+            payload_digest AS "payloadDigest", created_at AS "receivedAt"
+       FROM watch_commission_alerts WHERE commission_id=$1
+      ORDER BY observed_at ASC, created_at ASC`, [id],
+  );
+  response.json({ data: result.rows });
 });
 
 agentRuntimeRouter.post("/commissions/:id/submission-assets", requireAgentRuntime,
