@@ -26,6 +26,7 @@ import { getWalletSession, GuildHallApiError, guildhallApi, type ApiCommission, 
 const navItems = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "work", label: "Open commissions", icon: Search },
+  { id: "guild-board", label: "Guild Board", icon: Layers3 },
   { id: "mine", label: "My commissions", icon: ScrollText },
   { id: "agents", label: "My agents", icon: Layers3 },
 ];
@@ -66,6 +67,12 @@ const localDateTime = (value: number) => {
 type CommissionSubmission = { id: string; revision: number; submitted_at: string; summary: string; evidence: { kind: string; label: string; value: string }[] };
 type CommissionActivity = { id: string; type: string; details: Record<string, unknown>; createdAt: string };
 type AgentMatch = { id: string; name: string; description: string; categories: string[]; capabilities: string[]; lastRuntimeSeen: string | null; runtimeRecentlyActive: boolean };
+type GuildBoardEntry = {
+  guildId: string; name: string; description: string; ownerWallet: string; slaHours: number;
+  bondTargetAtomic: string; bondConfirmedAtomic: string; memberCount: number;
+  members: { walletAddress: string; shareBps: number }[]; settledJobs: number;
+  totalPaidAtomic: string; acceptanceRatePercent: number | null;
+};
 type FundingInstructions = {
   commissionId: string; cluster: string; assetMint: string; amountAtomic: string; clientWallet: string;
   unsignedTransaction: string; lastValidBlockHeight: number; termsHash?: string;
@@ -210,6 +217,7 @@ function LiveWorkspace() {
   const [session, setSession] = useState<WalletSession | null>(null);
   const [openJobs, setOpenJobs] = useState<ApiCommission[]>([]);
   const [myJobs, setMyJobs] = useState<ApiCommission[]>([]);
+  const [guildBoard, setGuildBoard] = useState<GuildBoardEntry[]>([]);
   const [agentMatches, setAgentMatches] = useState<AgentMatch[]>([]);
   const [agentMatchesLoading, setAgentMatchesLoading] = useState(false);
   const [agentMatchesError, setAgentMatchesError] = useState("");
@@ -226,6 +234,10 @@ function LiveWorkspace() {
   const [tribunalFilter, setTribunalFilter] = useState("all");
   const [sortOpenJobs, setSortOpenJobs] = useState("newest");
   const [createOpen, setCreateOpen] = useState(false);
+  const [guildToHire, setGuildToHire] = useState<GuildBoardEntry | null>(null);
+  const [guildSearch, setGuildSearch] = useState("");
+  const [guildWorkForm, setGuildWorkForm] = useState({ title: "", description: "", category: "operations", amount: "25", asset: "USDC", safe: false });
+  const [guildTasks, setGuildTasks] = useState<Record<string, { title: string; description: string }>>({});
   const [detail, setDetail] = useState<ApiCommission | null>(null);
   const [action, setAction] = useState<"submit" | "review" | null>(null);
   const [summary, setSummary] = useState("");
@@ -275,13 +287,15 @@ function LiveWorkspace() {
   const refresh = useCallback(async () => {
     setError("");
     try {
-      const [nextOpen, nextAssets, nextSession] = await Promise.all([
+      const [nextOpen, nextAssets, nextSession, nextGuildBoard] = await Promise.all([
         guildhallApi<ApiCommission[]>("/commissions?limit=50"),
         guildhallApi<{ USDC: string | null; USDT: string | null; cluster: string }>("/commissions/assets"),
         getWalletSession(),
+        guildhallApi<GuildBoardEntry[]>("/guilds/board"),
       ]);
       setOpenJobs(nextOpen);
       setAssets(nextAssets);
+      setGuildBoard(nextGuildBoard);
       setSession(nextSession);
       setMyJobs(nextSession ? await guildhallApi<ApiCommission[]>("/commissions/mine?limit=100") : []);
     } catch (cause) {
@@ -542,6 +556,45 @@ function LiveWorkspace() {
     } finally { setBusy(false); }
   };
 
+  const hireGuild = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!session || !guildToHire) { toast.error("Connect a wallet before commissioning a Guild."); return; }
+    if (!guildWorkForm.safe) { toast.error("Confirm the work follows GuildHall’s task rules."); return; }
+    const paidMembers = guildToHire.members.filter((member) => member.shareBps > 0);
+    const tasks = paidMembers.map((member) => ({ walletAddress: member.walletAddress, ...guildTasks[member.walletAddress] }));
+    if (tasks.some((task) => !task.title?.trim() || !task.description?.trim())) {
+      toast.error("Add a task and delivery criteria for every paid Guild member.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const created = await guildhallApi<{ commissionId: string }>(`/guilds/${guildToHire.guildId}/commissions`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          title: guildWorkForm.title,
+          description: guildWorkForm.description,
+          asset: guildWorkForm.asset,
+          amount: guildWorkForm.amount,
+          category: guildWorkForm.category,
+          tasks,
+          safetyAttestation: true,
+        }),
+      });
+      toast.success("Guild commission posted. Fund its escrow to start the work.");
+      setGuildToHire(null);
+      setGuildWorkForm({ title: "", description: "", category: "operations", amount: "25", asset: "USDC", safe: false });
+      setGuildTasks({});
+      setTab("mine");
+      await refresh();
+      const mine = await guildhallApi<ApiCommission[]>("/commissions/mine?limit=100");
+      const createdCommission = mine.find((commission) => commission.id === created.commissionId);
+      if (createdCommission) await openCommission(createdCommission);
+    } catch (cause) {
+      toast.error((cause as Error).message || "Could not create the Guild commission.");
+    } finally { setBusy(false); }
+  };
+
   const acceptWork = async (job: ApiCommission) => {
     if (!session) { toast.error("Connect a wallet before accepting work."); return; }
     setBusy(true);
@@ -626,12 +679,36 @@ function LiveWorkspace() {
             <label className="market-filter"><span>Sort by</span><Select value={sortOpenJobs} onValueChange={setSortOpenJobs}><SelectTrigger className="guild-select" aria-label="Sort commissions"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="newest">Newest</SelectItem><SelectItem value="payout">Highest payout</SelectItem><SelectItem value="deadline">Soonest due</SelectItem></SelectContent></Select></label>
             {filtersActive && <Button className="market-clear-filters" variant="ghost" onClick={() => { setSearch(""); setCategoryFilter("all"); setAssetFilter("all"); setMinimumBudget(""); setMaximumBudget(""); setDeadlineFilter("all"); setTribunalFilter("all"); setSortOpenJobs("newest"); }}>Clear filters</Button>}
           </div></div><div className="live-commission-grid">{visibleOpen.map((job) => <CommissionCard key={job.id} commission={job} onOpen={openCommission} onAccept={acceptWork} session={session} asset={assetName(job)} />)}{!visibleOpen.length && <p className="live-empty">No matching open commissions.</p>}</div></section>}
+          {tab === "guild-board" && <section className="dashboard-panel">
+            <div className="panel-heading"><div><h2>Guilds taking work</h2><p className="my-commission-intro">Bonded teams with a shared service record. Hire a Guild for one commission; escrow and payout follow the standard GuildHall flow.</p></div><span className="mono muted">{guildBoard.length} ACTIVE</span></div>
+            <div className="market-toolbar"><label className="search-field"><Search size={17}/><Input aria-label="Search Guild Board" placeholder="Search Guilds and capabilities" value={guildSearch} onChange={(event) => setGuildSearch(event.target.value)}/></label><span className="mono muted">RANKED BY SETTLED WORK</span></div>
+            <div className="guild-board-grid">{guildBoard.filter((guild) => `${guild.name} ${guild.description}`.toLowerCase().includes(guildSearch.toLowerCase())).map((guild) => {
+              const isMember = session && guild.members.some((member) => member.walletAddress === session.walletAddress);
+              const shareTotal = guild.members.reduce((sum, member) => sum + member.shareBps, 0);
+              return <article className="guild-board-card" key={guild.guildId}>
+                <header><span className="agent-glyph"><Layers3 size={22}/></span><div><h3>{guild.name}</h3><span>Bonded Guild · {guild.memberCount} paid member{guild.memberCount === 1 ? "" : "s"}</span></div><span className="status status-complete">TAKING WORK</span></header>
+                <p>{guild.description}</p>
+                <div className="guild-board-metrics"><div><b>{guild.settledJobs}</b><small>settled Guild jobs</small></div><div><b>{guild.acceptanceRatePercent === null ? "—" : `${guild.acceptanceRatePercent.toFixed(0)}%`}</b><small>acceptance rate</small></div><div><b>{amount(guild.totalPaidAtomic)} USDC</b><small>paid through GuildHall</small></div><div><b>{guild.slaHours}h</b><small>service SLA</small></div></div>
+                <div className="guild-board-roster"><span className="eyebrow">PAYOUT SHARES</span>{guild.members.map((member) => <span key={member.walletAddress}>{shortWallet(member.walletAddress)} <b>{(member.shareBps / 100).toFixed(0)}%</b></span>)}{shareTotal !== 10000 && <small>Guild lead is completing its payout plan.</small>}</div>
+                <footer><span className="mono muted">Bond {amount(guild.bondConfirmedAtomic)} / {amount(guild.bondTargetAtomic)} USDC</span><Button className="button button-gold" disabled={!session || busy || Boolean(isMember) || shareTotal !== 10000} onClick={() => { setGuildWorkForm({ title: "", description: "", category: "operations", amount: "25", asset: assets.USDC ? "USDC" : "USDT", safe: false }); setGuildTasks(Object.fromEntries(guild.members.filter((member) => member.shareBps > 0).map((member) => [member.walletAddress, { title: "", description: "" }]))); setGuildToHire(guild); }}>{!session ? "Connect to hire" : isMember ? "Your Guild" : shareTotal !== 10000 ? "Payout plan incomplete" : "Commission this Guild"}</Button></footer>
+              </article>;
+            })}{!guildBoard.length && <div className="empty-state"><h2>No Guilds on the Board yet</h2><p>Guild listings appear here after their shared bond is funded and member payout shares are set.</p></div>}{guildBoard.length > 0 && !guildBoard.some((guild) => `${guild.name} ${guild.description}`.toLowerCase().includes(guildSearch.toLowerCase())) && <p className="live-empty">No Guilds match that search.</p>}</div>
+          </section>}
           {tab === "mine" && <><div className="metric-grid three my-commission-metrics"><div className="metric-card"><Clock /><span>Active commissions</span><strong>{activeMine.length}</strong><small>Work still moving through the process</small></div><div className="metric-card"><ShieldCheck /><span>Needs your action</span><strong>{needsAttention.length}</strong><small>Funding, delivery, or review</small></div><div className="metric-card"><ScrollText /><span>Completed</span><strong>{myJobs.filter((job) => job.status === "complete").length}</strong><small>Commission history for this wallet</small></div></div><section className="dashboard-panel"><div className="panel-heading"><div><h2>Your commissions</h2><p className="my-commission-intro">Follow each commission’s current step, latest update, and what to do next.</p></div><span className="mono muted">{myJobs.length} RECORDS</span></div>{!session ? <p className="live-empty">Connect your wallet to see commissions you posted or accepted.</p> : <div className="live-commission-grid">{recentMine.map((job) => <MyCommissionCard key={job.id} commission={job} session={session} asset={assetName(job)} onOpen={openCommission} />)}{!myJobs.length && <p className="live-empty">This wallet has no commissions yet.</p>}</div>}</section></>}
           {tab === "agents" && <AgentManagement session={session} />}
         </>}
       </main>
     </SidebarInset>
     <Toaster theme="dark" position="bottom-right" />
+    <Dialog open={!!guildToHire} onOpenChange={(open) => { if (!open) setGuildToHire(null); }}><DialogContent className="commission-dialog"><DialogTitle>Commission {guildToHire?.name}</DialogTitle><DialogDescription>Define one Guild commission and assign work to every member in its payout plan. The Guild’s SLA sets the due date. Escrow is funded separately after posting.</DialogDescription>{guildToHire && <form className="guild-form" onSubmit={(event) => void hireGuild(event)}>
+      <div><Label htmlFor="guild-job-title">Commission title</Label><Input id="guild-job-title" required minLength={3} maxLength={160} value={guildWorkForm.title} onChange={(event) => setGuildWorkForm({ ...guildWorkForm, title: event.target.value })}/></div>
+      <div><Label htmlFor="guild-job-description">Brief and acceptance criteria</Label><Textarea id="guild-job-description" required minLength={1} maxLength={20000} rows={5} value={guildWorkForm.description} onChange={(event) => setGuildWorkForm({ ...guildWorkForm, description: event.target.value })}/></div>
+      <div className="form-two"><div><Label>Category</Label><Select value={guildWorkForm.category} onValueChange={(category) => setGuildWorkForm({ ...guildWorkForm, category })}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{categories.map((category) => <SelectItem key={category} value={category}>{category}</SelectItem>)}</SelectContent></Select></div><div><Label>Settlement asset</Label><Select value={guildWorkForm.asset} onValueChange={(asset) => setGuildWorkForm({ ...guildWorkForm, asset })}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{(["USDC", "USDT"] as const).filter((asset) => assets[asset]).map((asset) => <SelectItem key={asset} value={asset}>{asset}</SelectItem>)}</SelectContent></Select></div></div>
+      <div><Label htmlFor="guild-job-budget">Total commission budget · {guildWorkForm.asset}</Label><Input id="guild-job-budget" type="number" required min="0.01" step="0.000001" max="100000000000" value={guildWorkForm.amount} onChange={(event) => setGuildWorkForm({ ...guildWorkForm, amount: event.target.value })}/><p className="micro-copy">GuildHall’s completion fee is deducted first; the remaining payout follows each member’s published share.</p></div>
+      <section className="guild-task-assignees"><div><span className="eyebrow">MEMBER DELIVERABLES</span><p>Each paid member needs a task with its own completion criteria.</p></div>{guildToHire.members.filter((member) => member.shareBps > 0).map((member) => <article key={member.walletAddress}><header><strong>{shortWallet(member.walletAddress)}</strong><b>{(member.shareBps / 100).toFixed(0)}% share</b></header><Input aria-label={`Task title for ${shortWallet(member.walletAddress)}`} required minLength={3} maxLength={160} placeholder="Task title" value={guildTasks[member.walletAddress]?.title ?? ""} onChange={(event) => setGuildTasks({ ...guildTasks, [member.walletAddress]: { ...guildTasks[member.walletAddress], title: event.target.value, description: guildTasks[member.walletAddress]?.description ?? "" } })}/><Textarea aria-label={`Task requirements for ${shortWallet(member.walletAddress)}`} required minLength={1} maxLength={5000} rows={2} placeholder="Task deliverable and acceptance criteria" value={guildTasks[member.walletAddress]?.description ?? ""} onChange={(event) => setGuildTasks({ ...guildTasks, [member.walletAddress]: { ...guildTasks[member.walletAddress], title: guildTasks[member.walletAddress]?.title ?? "", description: event.target.value } })}/></article>)}</section>
+      <label className="live-safety-confirm"><input type="checkbox" checked={guildWorkForm.safe} onChange={(event) => setGuildWorkForm({ ...guildWorkForm, safe: event.target.checked })}/><span>I confirm the commission and member tasks follow GuildHall’s task rules.</span></label>
+      <div className="form-actions"><Button type="button" variant="ghost" onClick={() => setGuildToHire(null)}>Cancel</Button><Button type="submit" className="button button-gold" disabled={busy || !guildWorkForm.safe}>{busy ? <LoaderCircle className="spin" size={16}/> : <Plus size={16}/>}Post Guild commission</Button></div>
+    </form>}</DialogContent></Dialog>
     <AlertDialog open={takeDownOpen} onOpenChange={setTakeDownOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Take down this commission?</AlertDialogTitle><AlertDialogDescription>This removes the commission from the open work board. Only unclaimed, open commissions with no escrow funding can be taken down. If a funding transaction was recently prepared, wait for it to expire first. Surety policies must also be cancelled or resolved.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep commission open</AlertDialogCancel><AlertDialogAction disabled={takingDown} onClick={(event) => { event.preventDefault(); void takeDownCommission(); }}>{takingDown ? "Taking down…" : "Take down commission"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="commission-dialog"><DialogTitle>Post a commission</DialogTitle><DialogDescription>Set the work, budget, and deadline. The commission becomes active after escrow funding.</DialogDescription><form className="guild-form" onSubmit={(event) => void createCommission(event)}>
       <div><Label htmlFor="live-title">Title</Label><Input id="live-title" required minLength={3} maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></div>

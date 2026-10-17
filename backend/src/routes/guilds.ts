@@ -101,6 +101,67 @@ router.get("/invitations", requireAuth, async (request, response) => {
   response.json({ data: result.rows });
 });
 
+router.get("/board", async (_request, response) => {
+  const result = await pool.query<{
+    id: string; name: string; description: string; sla_hours: number; bond_target_atomic: string;
+    bond_confirmed_atomic: string; owner_wallet: string; member_count: string; share_total_bps: string;
+    members: { walletAddress: string; shareBps: number }[];
+    settled_jobs: string; total_paid_atomic: string; acceptance_rate: string | null;
+  }>(
+    `SELECT g.id, g.name, g.description, g.sla_hours, g.bond_target_atomic::text,
+            u.wallet_address AS owner_wallet,
+            COALESCE(bond.confirmed_atomic, '0') AS bond_confirmed_atomic,
+            COALESCE(roster.member_count, 0)::text AS member_count,
+            COALESCE(roster.share_total_bps, '0') AS share_total_bps,
+            COALESCE(roster.members, '[]'::jsonb) AS members,
+            COALESCE(performance.settled_jobs, '0') AS settled_jobs,
+            COALESCE(performance.total_paid_atomic, '0') AS total_paid_atomic,
+            performance.acceptance_rate
+       FROM guilds g
+       JOIN wallet_users u ON u.id = g.owner_user_id
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(sum(amount_atomic), 0)::text AS confirmed_atomic
+           FROM guild_bond_deposits WHERE guild_id = g.id AND confirmed_at IS NOT NULL
+       ) bond ON true
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS member_count,
+                COALESCE(sum(gm.share_bps), 0)::text AS share_total_bps,
+                jsonb_agg(jsonb_build_object('walletAddress', wu.wallet_address, 'shareBps', gm.share_bps)
+                          ORDER BY CASE WHEN gm.role = 'lead' THEN 0 ELSE 1 END, gm.joined_at) AS members
+           FROM guild_members gm JOIN wallet_users wu ON wu.id = gm.user_id
+          WHERE gm.guild_id = g.id AND gm.share_bps > 0
+       ) roster ON true
+       LEFT JOIN LATERAL (
+         SELECT count(wr.id)::text AS settled_jobs,
+                COALESCE(sum(wr.paid_amount_atomic), 0)::text AS total_paid_atomic,
+                (avg((wr.outcome IN ('accepted', 'tribunal_provider'))::int) * 100)::text AS acceptance_rate
+           FROM guild_commissions gc
+           JOIN commissions c ON c.id = gc.commission_id AND c.status IN ('complete', 'refunded')
+           JOIN work_records wr ON wr.commission_id = c.id
+          WHERE gc.guild_id = g.id
+       ) performance ON true
+      WHERE g.status = 'active'
+        AND COALESCE(bond.confirmed_atomic::numeric, 0) >= g.bond_target_atomic
+        AND roster.member_count > 0
+        AND roster.share_total_bps::int = 10000
+      ORDER BY performance.settled_jobs::int DESC NULLS LAST, g.created_at ASC`,
+  );
+  response.json({ data: result.rows.map((row) => ({
+    guildId: row.id,
+    name: row.name,
+    description: row.description,
+    ownerWallet: row.owner_wallet,
+    slaHours: row.sla_hours,
+    bondTargetAtomic: row.bond_target_atomic,
+    bondConfirmedAtomic: row.bond_confirmed_atomic,
+    memberCount: Number(row.member_count),
+    members: row.members,
+    settledJobs: Number(row.settled_jobs),
+    totalPaidAtomic: row.total_paid_atomic,
+    acceptanceRatePercent: row.acceptance_rate === null ? null : Number(row.acceptance_rate),
+  })) });
+});
+
 router.get("/:guildId", async (request, response) => {
   response.json({ data: await guildData(uuid.parse(request.params.guildId)) });
 });
