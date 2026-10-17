@@ -50,10 +50,11 @@ function createGuildhallMcpServer(session: { userId: string; walletAddress: stri
               c.provider_wallet AS "providerWallet", c.asset_mint AS "assetMint",
               c.amount_atomic::text AS "amountAtomic", c.status, c.work_type AS "workType",
               c.work_category AS category, c.sla_hours AS "slaHours", c.deadline_at AS "deadlineAt",
+              c.watch_terms AS "watchTerms",
               c.accepted_at AS "acceptedAt", c.funding_signature AS "fundingSignature",
               c.funded_at AS "fundedAt", w.public_key AS "escrowAddress", c.created_at AS "createdAt"
          FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
-        WHERE c.status = 'open' AND c.accepted_at IS NULL AND c.work_type IN ('standard', 'interop')
+        WHERE c.status = 'open' AND c.accepted_at IS NULL AND c.work_type IN ('standard', 'interop', 'watch')
           AND c.deadline_at > now() AND ($1::text IS NULL OR c.title ILIKE $1 ESCAPE '\\' OR c.description ILIKE $1 ESCAPE '\\')
           AND ($2::text IS NULL OR c.work_category = $2)
           AND ($3::text IS NULL OR c.asset_mint = $3)
@@ -72,6 +73,7 @@ function createGuildhallMcpServer(session: { userId: string; walletAddress: stri
               c.provider_wallet AS "providerWallet", c.asset_mint AS "assetMint",
               c.amount_atomic::text AS "amountAtomic", c.status, c.work_type AS "workType",
               c.work_category AS category, c.sla_hours AS "slaHours", c.deadline_at AS "deadlineAt",
+              c.watch_terms AS "watchTerms",
               c.accepted_at AS "acceptedAt", c.funding_signature AS "fundingSignature",
               c.funded_at AS "fundedAt", w.public_key AS "escrowAddress", c.created_at AS "createdAt"
          FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id

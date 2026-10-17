@@ -69,11 +69,12 @@ export async function commissionTermsRecord(commissionId: string) {
   const result = await pool.query<{
     id: string; client_wallet: string; title: string; description: string; asset_mint: string; amount_atomic: string;
     work_category: string | null; sla_hours: number | null; requires_tribunal: boolean; deadline_at: Date;
+    work_type: string; watch_terms: unknown;
     funding_signature: string | null; terms_hash: string | null; terms_hashed_at: Date | null; terms_anchored: boolean;
     cluster: string | null;
   }>(
     `SELECT c.id, c.client_wallet, c.title, c.description, c.asset_mint, c.amount_atomic::text, c.work_category,
-            c.sla_hours, c.requires_tribunal, c.deadline_at, c.funding_signature, c.terms_hash, c.terms_hashed_at,
+            c.sla_hours, c.requires_tribunal, c.deadline_at, c.work_type, c.watch_terms, c.funding_signature, c.terms_hash, c.terms_hashed_at,
             c.terms_anchored, w.cluster
        FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id WHERE c.id = $1`, [commissionId],
   );

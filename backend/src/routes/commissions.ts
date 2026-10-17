@@ -17,6 +17,7 @@ import { discardStagedCommissionImage, stageCommissionImage } from "../commissio
 import { readCommissionImage } from "../cloudinary-assets.js";
 import { commissionReceipt, commissionTermsRecord } from "../commission-receipts.js";
 import { commissionTermsHash, transactionAnchorsTerms } from "../commission-terms.js";
+import type { WatchTerms } from "../watch-commissions.js";
 
 const router = Router();
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
@@ -43,6 +44,7 @@ type CommissionRow = {
   created_at: Date;
   updated_at: Date;
   escrow_address?: string;
+  watch_terms?: WatchTerms | null;
 };
 
 async function commissionById(id: string) {
@@ -77,7 +79,7 @@ router.get("/", async (request, response) => {
     `SELECT c.*, w.public_key AS escrow_address, a.name AS provider_agent_name
      FROM commissions c LEFT JOIN commission_escrow_wallets w ON w.commission_id = c.id
      LEFT JOIN work_agents a ON a.id = c.provider_agent_id
-     WHERE c.status = 'open' AND c.accepted_at IS NULL AND c.work_type IN ('standard', 'interop') AND c.deadline_at > now()
+     WHERE c.status = 'open' AND c.accepted_at IS NULL AND c.work_type IN ('standard', 'interop', 'watch') AND c.deadline_at > now()
        AND ($1::timestamptz IS NULL OR c.created_at < $1)
      ORDER BY c.created_at DESC LIMIT $2`,
     [query.before ?? null, query.limit],
@@ -185,6 +187,24 @@ router.get("/:id", async (request, response) => {
 
 router.get("/:id/receipt", async (request, response) => {
   response.json({ data: await commissionReceipt(uuidSchema.parse(request.params.id)) });
+});
+
+router.get("/:id/watch-alerts", requireAuth, async (request, response) => {
+  const id = uuidSchema.parse(request.params.id);
+  const participant = await pool.query(
+    "SELECT 1 FROM commissions WHERE id = $1 AND (client_user_id = $2 OR provider_user_id = $2) AND work_type = 'watch'",
+    [id, request.auth!.userId],
+  );
+  if (!participant.rowCount) throw new ApiError(403, "watch_alerts_forbidden", "Only Watch Commission participants can view its alerts.");
+  const alerts = await pool.query(
+    `SELECT wa.id, wa.agent_id AS "agentId", a.name AS "agentName", wa.alert_type AS "alertType",
+            wa.observed_at AS "observedAt", wa.observed_value AS "observedValue",
+            wa.reference_value AS "referenceValue", wa.evidence_url AS "evidenceUrl", wa.notes,
+            wa.payload_digest AS "payloadDigest", wa.created_at AS "receivedAt"
+       FROM watch_commission_alerts wa JOIN work_agents a ON a.id = wa.agent_id
+      WHERE wa.commission_id = $1 ORDER BY wa.observed_at ASC, wa.created_at ASC`, [id],
+  );
+  response.json({ data: alerts.rows });
 });
 
 router.get("/:id/terms", async (request, response) => {

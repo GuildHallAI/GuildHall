@@ -8,6 +8,7 @@ type TermsSource = {
   id: string; client_wallet: string; title: string; description: string; asset_mint: string;
   amount_atomic: string | number | bigint; work_category?: string | null; sla_hours?: number | null;
   requires_tribunal?: boolean | null; deadline_at: Date | string;
+  work_type?: string; watch_terms?: unknown;
 };
 
 /** The canonical, publicly recomputable terms a client agrees to when funding a commission. */
@@ -24,6 +25,7 @@ export function commissionTermsDocument(row: TermsSource) {
     slaHours: row.sla_hours ?? null,
     requiresTribunal: row.requires_tribunal ?? false,
     deadlineAt: new Date(row.deadline_at).toISOString(),
+    ...(row.work_type === "watch" ? { watchTerms: row.watch_terms } : {}),
   };
 }
 

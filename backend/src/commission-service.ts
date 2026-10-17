@@ -13,6 +13,7 @@ import { createCommissionEscrowWallet } from "./escrow-wallets.js";
 import { ApiError } from "./http.js";
 import { assertSafeTaskText, taskSafetyAttestation } from "./task-policy.js";
 import { commissionTermsHash, termsMemoInstruction } from "./commission-terms.js";
+import { watchTermsSchema } from "./watch-commissions.js";
 
 const amountInput = z.string().regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,6})?$/, "Use a positive decimal amount with at most 6 decimal places.");
 export const commissionCreateInputSchema = z.object({
@@ -24,8 +25,14 @@ export const commissionCreateInputSchema = z.object({
   slaHours: z.number().int().min(1).max(8760).optional(),
   providerWallet: z.string().min(32).max(44).optional(),
   requiresTribunal: z.boolean().default(false),
+  workType: z.enum(["standard", "watch"]).default("standard"),
+  watchTerms: watchTermsSchema.optional(),
   deadlineAt: z.coerce.date().optional(),
   safetyAttestation: taskSafetyAttestation,
+}).superRefine((input, context) => {
+  if (input.workType === "watch" && !input.watchTerms) context.addIssue({ code: "custom", path: ["watchTerms"], message: "Watch commission terms are required." });
+  if (input.workType !== "watch" && input.watchTerms) context.addIssue({ code: "custom", path: ["watchTerms"], message: "Watch terms can only be set for Watch Commissions." });
+  if (input.workType === "watch" && input.category !== "watch") context.addIssue({ code: "custom", path: ["category"], message: "Watch Commissions must use the watch category." });
 });
 
 type CommissionRow = {
@@ -57,6 +64,7 @@ type CommissionRow = {
   terms_hash?: string | null;
   terms_hashed_at?: Date | null;
   terms_anchored?: boolean;
+  watch_terms?: unknown;
 };
 
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
@@ -154,6 +162,7 @@ export function publicCommission(row: CommissionRow) {
     escrowAddress: row.escrow_address,
     termsHash: row.terms_hash ?? null,
     termsAnchored: row.terms_anchored ?? false,
+    watchTerms: row.work_type === "watch" ? row.watch_terms ?? null : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -194,7 +203,7 @@ export async function createCommissionForWallet(
   const providerWallet = input.providerWallet ? canonicalWallet(input.providerWallet) : null;
   const mint = assetMint(input.asset);
   const amountAtomic = toAtomic(input.amount);
-  const requestHash = createHash("sha256").update(JSON.stringify({
+  const requestDocument = {
     title: input.title,
     description: input.description,
     asset: input.asset,
@@ -205,7 +214,9 @@ export async function createCommissionForWallet(
     providerWallet,
     requiresTribunal: input.requiresTribunal,
     deadlineAt: input.deadlineAt?.toISOString() ?? null,
-  })).digest("hex");
+    ...(input.workType === "watch" ? { workType: input.workType, watchTerms: input.watchTerms } : {}),
+  };
+  const requestHash = createHash("sha256").update(JSON.stringify(requestDocument)).digest("hex");
   const deadlineAt = input.deadlineAt ?? new Date(Date.now() + (input.slaHours ?? 168) * 60 * 60 * 1000);
   const client = await pool.connect();
   try {
@@ -226,11 +237,12 @@ export async function createCommissionForWallet(
     const inserted = await client.query<CommissionRow>(
       `INSERT INTO commissions
          (client_user_id, client_wallet, provider_wallet, title, description, asset_mint,
-          amount_atomic, status, deadline_at, idempotency_key, request_hash, work_category, sla_hours, requires_tribunal, provider_wallet_locked)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+          amount_atomic, status, deadline_at, idempotency_key, request_hash, work_category, sla_hours, requires_tribunal, provider_wallet_locked, work_type, watch_terms)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
       [user.userId, user.walletAddress, providerWallet, input.title, input.description,
         mint, amountAtomic, deadlineAt, idempotencyKey, requestHash, input.category, input.slaHours ?? null,
-        input.requiresTribunal, Boolean(providerWallet)],
+        input.requiresTribunal, Boolean(providerWallet), input.workType,
+        input.watchTerms ? JSON.stringify(input.watchTerms) : null],
     );
     const escrow = await createCommissionEscrowWallet(client, inserted.rows[0].id);
     await client.query("COMMIT");

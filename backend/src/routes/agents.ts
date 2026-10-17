@@ -8,6 +8,7 @@ import { publicCommission } from "../commission-service.js";
 import { submitCommissionWork } from "../commission-work.js";
 import { discardStagedCommissionImage, stageCommissionImage } from "../commission-assets.js";
 import { config } from "../config.js";
+import { watchAlertSchema, watchAlertDigest, watchTermsSchema } from "../watch-commissions.js";
 
 export const agentsRouter = Router();
 
@@ -268,7 +269,7 @@ agentRuntimeRouter.get("/commissions", requireAgentRuntime, async (request, resp
       WHERE c.status='funded' AND c.provider_user_id IS NULL AND c.accepted_at IS NULL
         AND c.deadline_at > now() AND c.client_user_id <> a.owner_user_id
         AND (cardinality(a.categories)=0 OR c.work_category=ANY(a.categories))
-        AND c.work_type IN ('standard','interop')
+        AND c.work_type IN ('standard','interop','watch')
       ORDER BY c.funded_at ASC NULLS LAST, c.created_at ASC LIMIT $2`,
     [request.agentRuntime!.agentId, query.limit],
   );
@@ -300,7 +301,7 @@ agentRuntimeRouter.post("/commissions/:id/claim", requireAgentRuntime, async (re
       return;
     }
     if (job.client_user_id === job.owner_user_id) throw new ApiError(409, "self_acceptance", "An agent cannot accept a commission posted by its owner wallet.");
-    if (job.work_type !== "standard" && job.work_type !== "interop") throw new ApiError(409, "agent_work_type_unsupported", "This agent endpoint accepts standard commissions only.");
+    if (!['standard', 'interop', 'watch'].includes(job.work_type)) throw new ApiError(409, "agent_work_type_unsupported", "This agent endpoint accepts standard, Interop, and Watch Commissions.");
     if (job.categories.length && !job.categories.includes(job.work_category)) throw new ApiError(403, "agent_category_mismatch", "This commission is outside the agent's registered categories.");
     if (job.status !== "funded" || job.provider_user_id || job.accepted_at || job.deadline_at <= new Date()) {
       throw new ApiError(409, "commission_unavailable", "This funded commission is no longer available to claim.");
@@ -330,6 +331,68 @@ agentRuntimeRouter.post("/commissions/:id/submissions", requireAgentRuntime, asy
   if (!assigned.rowCount) throw new ApiError(403, "agent_commission_forbidden", "This agent is not assigned to the commission.");
   const submission = await submitCommissionWork(id, request.agentRuntime!.ownerUserId, request.body, request.agentRuntime!.agentId);
   response.status(201).json({ data: submission });
+});
+
+agentRuntimeRouter.post("/commissions/:id/watch-alerts", requireAgentRuntime, async (request, response) => {
+  const id = z.string().uuid().parse(request.params.id);
+  const input = watchAlertSchema.parse(request.body);
+  const selected = await pool.query<{
+    provider_agent_id: string | null; provider_user_id: string | null; status: string;
+    funded_at: Date | null; deadline_at: Date; watch_terms: unknown;
+  }>(
+    `SELECT provider_agent_id, provider_user_id, status, funded_at, deadline_at, watch_terms
+       FROM commissions WHERE id = $1 AND work_type = 'watch'`, [id],
+  );
+  const commission = selected.rows[0];
+  if (!commission) throw new ApiError(404, "watch_commission_not_found", "Watch Commission not found.");
+  if (commission.provider_agent_id !== request.agentRuntime!.agentId || commission.provider_user_id !== request.agentRuntime!.ownerUserId) {
+    throw new ApiError(403, "watch_agent_unassigned", "This agent is not assigned to the Watch Commission.");
+  }
+  if (!['funded', 'submitted'].includes(commission.status) || !commission.funded_at) {
+    throw new ApiError(409, "watch_commission_not_funded", "Watch alerts can only be submitted for a funded commission.");
+  }
+  const terms = watchTermsSchema.parse(commission.watch_terms);
+  if (terms.trigger.type !== input.alertType) throw new ApiError(400, "watch_alert_type_mismatch", "Alert type must match the commission's configured watch condition.");
+  const observedAt = new Date(input.observedAt);
+  const monitoringEndsAt = new Date(Math.min(
+    commission.funded_at.getTime() + terms.monitoringHours * 60 * 60 * 1000,
+    commission.deadline_at.getTime(),
+  ));
+  if (observedAt < commission.funded_at || observedAt > monitoringEndsAt || observedAt > new Date()) {
+    throw new ApiError(422, "watch_alert_outside_window", "The alert timestamp must fall within the funded monitoring window and cannot be in the future.");
+  }
+  const digest = watchAlertDigest(input);
+  const prior = await pool.query<{ id: string; payload_digest: string; created_at: Date }>(
+    "SELECT id, payload_digest, created_at FROM watch_commission_alerts WHERE commission_id = $1 AND agent_id = $2 AND idempotency_key = $3",
+    [id, request.agentRuntime!.agentId, input.idempotencyKey],
+  );
+  if (prior.rows[0]) {
+    if (prior.rows[0].payload_digest !== digest) throw new ApiError(409, "watch_alert_idempotency_conflict", "This alert idempotency key was already used for different alert data.");
+    response.json({ data: { id: prior.rows[0].id, payloadDigest: digest, receivedAt: prior.rows[0].created_at }, idempotentReplay: true });
+    return;
+  }
+  const count = await pool.query<{ count: number }>("SELECT count(*)::int AS count FROM watch_commission_alerts WHERE commission_id = $1", [id]);
+  if (count.rows[0].count >= 500) throw new ApiError(429, "watch_alert_limit", "This commission has reached its 500-alert limit.");
+  const inserted = await pool.query<{ id: string; created_at: Date }>(
+    `INSERT INTO watch_commission_alerts
+       (commission_id, agent_id, idempotency_key, alert_type, observed_at, observed_value,
+        reference_value, evidence_url, notes, payload_digest)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ON CONFLICT (commission_id, agent_id, idempotency_key) DO NOTHING
+     RETURNING id, created_at`,
+    [id, request.agentRuntime!.agentId, input.idempotencyKey, input.alertType, observedAt,
+      input.observedValue, input.referenceValue, input.evidenceUrl, input.notes, digest],
+  );
+  if (!inserted.rows[0]) {
+    const replay = await pool.query<{ id: string; payload_digest: string; created_at: Date }>(
+      "SELECT id, payload_digest, created_at FROM watch_commission_alerts WHERE commission_id = $1 AND agent_id = $2 AND idempotency_key = $3",
+      [id, request.agentRuntime!.agentId, input.idempotencyKey],
+    );
+    if (replay.rows[0]?.payload_digest !== digest) throw new ApiError(409, "watch_alert_idempotency_conflict", "This alert idempotency key was already used for different alert data.");
+    response.json({ data: { id: replay.rows[0].id, payloadDigest: digest, receivedAt: replay.rows[0].created_at }, idempotentReplay: true });
+    return;
+  }
+  response.status(201).json({ data: { id: inserted.rows[0].id, payloadDigest: digest, receivedAt: inserted.rows[0].created_at } });
 });
 
 agentRuntimeRouter.post("/commissions/:id/submission-assets", requireAgentRuntime,

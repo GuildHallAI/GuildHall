@@ -26,6 +26,12 @@ export type ApiCommission = {
   escrowAddress?: string;
   termsHash?: string | null;
   termsAnchored?: boolean;
+  watchTerms?: {
+    venue: string;
+    market: string;
+    monitoringHours: number;
+    trigger: Record<string, string | number> & { type: string };
+  } | null;
   createdAt: string;
   updatedAt: string;
 };

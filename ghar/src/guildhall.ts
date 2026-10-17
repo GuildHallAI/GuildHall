@@ -26,6 +26,22 @@ export type Commission = {
   deadlineAt: string;
   amountAtomic: string;
   assetMint: string;
+  watchTerms?: {
+    venue: string;
+    market: string;
+    monitoringHours: number;
+    trigger: Record<string, number | string> & { type: "deviation" | "thin_ref" | "stale" | "funding_spike" };
+  } | null;
+};
+
+export type WatchAlert = {
+  idempotencyKey: string;
+  alertType: "deviation" | "thin_ref" | "stale" | "funding_spike";
+  observedAt: string;
+  observedValue: string;
+  referenceValue: string;
+  evidenceUrl: string;
+  notes: string;
 };
 
 export async function listCommissions(token = config.runtimeToken) {
@@ -56,6 +72,13 @@ export async function submitCommission(id: string, token: string, summary: strin
     method: "POST",
     body: JSON.stringify({ summary, evidence }),
   });
+}
+
+export async function submitWatchAlert(id: string, token: string, alert: WatchAlert) {
+  return request<{ id: string; payloadDigest: string; receivedAt: string }>(
+    `/commissions/${id}/watch-alerts`, token,
+    { method: "POST", body: JSON.stringify(alert) },
+  );
 }
 
 export async function releaseCommission(id: string, token = config.runtimeToken) {
