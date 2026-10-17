@@ -19,7 +19,7 @@ describe("Watch Commission terms and alerts", () => {
 
   it("requires HTTPS evidence and a matching alert type schema", () => {
     const alert = {
-      idempotencyKey: "70d78621-fa62-8f54-b9d5-4334e5634d83",
+      idempotencyKey: "00000000-0000-4000-8000-000000000001",
       alertType: "deviation",
       observedAt: "2026-10-17T12:00:00.000Z",
       observedValue: "101.2",
@@ -33,7 +33,7 @@ describe("Watch Commission terms and alerts", () => {
 
   it("creates stable alert digests and changes when alert content changes", () => {
     const alert = watchAlertSchema.parse({
-      idempotencyKey: "70d78621-fa62-8f54-b9d5-4334e5634d83", alertType: "deviation",
+      idempotencyKey: "00000000-0000-4000-8000-000000000001", alertType: "deviation",
       observedAt: "2026-10-17T12:00:00.000Z", observedValue: "101.2", referenceValue: "100",
       evidenceUrl: "https://example.com/market-snapshot", notes: "A sustained deviation was observed.",
     });

@@ -1,0 +1,4 @@
+[allowlist]
+description = "The Watch Commission documentation UUID is a non-secret idempotency example."
+regexTarget = "match"
+regexes = ['70d78621-fa62-8f54-b9d5-4334e5634d83']

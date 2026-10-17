@@ -34,7 +34,7 @@ describe("GuildHall API client", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const result = await submitWatchAlert("commission-1", token, {
-      idempotencyKey: "70d78621-fa62-8f54-b9d5-4334e5634d83",
+      idempotencyKey: "00000000-0000-4000-8000-000000000001",
       alertType: "deviation",
       observedAt: "2026-10-17T12:00:00.000Z",
       observedValue: "101.2",
