@@ -21,12 +21,14 @@ import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { WalletSessionControl } from "./wallet-session-control";
 import { AgentManagement } from "./agent-management";
+import { GuildManagement } from "./guild-management";
 import { getWalletSession, GuildHallApiError, guildhallApi, type ApiCommission, type WalletSession } from "@/lib/guildhall-api";
 
 const navItems = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "work", label: "Open commissions", icon: Search },
   { id: "guild-board", label: "Guild Board", icon: Layers3 },
+  { id: "guilds", label: "My Guilds", icon: Layers3 },
   { id: "mine", label: "My commissions", icon: ScrollText },
   { id: "agents", label: "My agents", icon: Layers3 },
 ];
@@ -665,7 +667,7 @@ function LiveWorkspace() {
     </Sidebar>
     <SidebarInset className="dashboard-main eerie-dashboard"><div className="hall-ambient" aria-hidden="true"><span>✦</span><div className="hall-grid" /><span>G H _ E S C R O W // G H _ T R I B U N A L</span></div>
       <header className="dashboard-topbar"><div><SidebarTrigger /><span className="mono">GUILDHALL / {tab.toUpperCase()}</span></div><div><span className="sandbox-tag">{assets.cluster.toUpperCase()}</span><Button variant="ghost" size="icon" aria-label="Refresh GuildHall" disabled={busy} onClick={() => void refresh()}><RefreshCw size={16} /></Button></div></header>
-      <main className="dashboard-content"><div className="dashboard-title"><div><span className="eyebrow">LIVE SOLANA MARKETPLACE</span><h1>{navItems.find((item) => item.id === tab)?.label ?? "Overview"}</h1><p>{tab === "agents" ? "Register your agents and manage their server runtime credentials." : "Browse real commissions, post paid work, and manage your wallet’s work history."}</p></div>{tab !== "agents" && <Button className="button button-gold" disabled={!session} onClick={() => setCreateOpen(true)}><Plus size={16} />New commission</Button>}</div>
+      <main className="dashboard-content"><div className="dashboard-title"><div><span className="eyebrow">LIVE SOLANA MARKETPLACE</span><h1>{navItems.find((item) => item.id === tab)?.label ?? "Overview"}</h1><p>{tab === "agents" ? "Register your agents and manage their server runtime credentials." : tab === "guilds" ? "Form a team, set its payout plan, and manage the shared Guild bond." : "Browse real commissions, post paid work, and manage your wallet’s work history."}</p></div>{!(["agents", "guilds"].includes(tab)) && <Button className="button button-gold" disabled={!session} onClick={() => setCreateOpen(true)}><Plus size={16} />New commission</Button>}</div>
         {!session && <div className="live-connect-banner"><div><strong>Connect a Solana wallet</strong><p>Wallet sign-in creates a GuildHall session. Your signing key stays in your wallet.</p></div><WalletSessionControl /></div>}
         {error && <div className="empty-state error-state"><ShieldCheck /><h2>The Hall could not load</h2><p>{error}</p><Button variant="outline" className="button" onClick={() => void refresh()}>Try again</Button></div>}
         {loading ? <div className="dashboard-loading"><LoaderCircle className="spin" /><p>Loading live commissions…</p></div> : !error && <>
@@ -696,6 +698,7 @@ function LiveWorkspace() {
           </section>}
           {tab === "mine" && <><div className="metric-grid three my-commission-metrics"><div className="metric-card"><Clock /><span>Active commissions</span><strong>{activeMine.length}</strong><small>Work still moving through the process</small></div><div className="metric-card"><ShieldCheck /><span>Needs your action</span><strong>{needsAttention.length}</strong><small>Funding, delivery, or review</small></div><div className="metric-card"><ScrollText /><span>Completed</span><strong>{myJobs.filter((job) => job.status === "complete").length}</strong><small>Commission history for this wallet</small></div></div><section className="dashboard-panel"><div className="panel-heading"><div><h2>Your commissions</h2><p className="my-commission-intro">Follow each commission’s current step, latest update, and what to do next.</p></div><span className="mono muted">{myJobs.length} RECORDS</span></div>{!session ? <p className="live-empty">Connect your wallet to see commissions you posted or accepted.</p> : <div className="live-commission-grid">{recentMine.map((job) => <MyCommissionCard key={job.id} commission={job} session={session} asset={assetName(job)} onOpen={openCommission} />)}{!myJobs.length && <p className="live-empty">This wallet has no commissions yet.</p>}</div>}</section></>}
           {tab === "agents" && <AgentManagement session={session} />}
+          {tab === "guilds" && <GuildManagement session={session} />}
         </>}
       </main>
     </SidebarInset>
