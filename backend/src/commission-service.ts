@@ -13,6 +13,7 @@ import { createCommissionEscrowWallet } from "./escrow-wallets.js";
 import { ApiError } from "./http.js";
 import { assertSafeTaskText, taskSafetyAttestation } from "./task-policy.js";
 import { commissionTermsHash, termsMemoInstruction } from "./commission-terms.js";
+import { acceptancePackSchema, type AcceptancePack } from "./acceptance-pack.js";
 
 const amountInput = z.string().regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,6})?$/, "Use a positive decimal amount with at most 6 decimal places.");
 export const commissionCreateInputSchema = z.object({
@@ -26,6 +27,7 @@ export const commissionCreateInputSchema = z.object({
   requiresTribunal: z.boolean().default(false),
   deadlineAt: z.coerce.date().optional(),
   safetyAttestation: taskSafetyAttestation,
+  acceptancePack: acceptancePackSchema.optional(),
 });
 
 type CommissionRow = {
@@ -54,6 +56,7 @@ type CommissionRow = {
   terms_hash?: string | null;
   terms_hashed_at?: Date | null;
   terms_anchored?: boolean;
+  acceptance_pack?: AcceptancePack | null;
 };
 
 const connection = new Connection(config.SOLANA_RPC_URL, config.SOLANA_COMMITMENT);
@@ -81,6 +84,7 @@ export function publicCommission(row: CommissionRow) {
     escrowAddress: row.escrow_address,
     termsHash: row.terms_hash ?? null,
     termsAnchored: row.terms_anchored ?? false,
+    acceptancePack: row.acceptance_pack ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -132,6 +136,7 @@ export async function createCommissionForWallet(
     providerWallet,
     requiresTribunal: input.requiresTribunal,
     deadlineAt: input.deadlineAt?.toISOString() ?? null,
+    acceptancePack: input.acceptancePack ?? null,
   })).digest("hex");
   const deadlineAt = input.deadlineAt ?? new Date(Date.now() + (input.slaHours ?? 168) * 60 * 60 * 1000);
   const client = await pool.connect();
@@ -153,11 +158,11 @@ export async function createCommissionForWallet(
     const inserted = await client.query<CommissionRow>(
       `INSERT INTO commissions
          (client_user_id, client_wallet, provider_wallet, title, description, asset_mint,
-          amount_atomic, status, deadline_at, idempotency_key, request_hash, work_category, sla_hours, requires_tribunal, provider_wallet_locked)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+          amount_atomic, status, deadline_at, idempotency_key, request_hash, work_category, sla_hours, requires_tribunal, provider_wallet_locked, acceptance_pack)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $10, $11, $12, $13, $14, $15::jsonb) RETURNING *`,
       [user.userId, user.walletAddress, providerWallet, input.title, input.description,
         mint, amountAtomic, deadlineAt, idempotencyKey, requestHash, input.category, input.slaHours ?? null,
-        input.requiresTribunal, Boolean(providerWallet)],
+        input.requiresTribunal, Boolean(providerWallet), input.acceptancePack ? JSON.stringify(input.acceptancePack) : null],
     );
     const escrow = await createCommissionEscrowWallet(client, inserted.rows[0].id);
     await client.query("COMMIT");

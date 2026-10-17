@@ -365,6 +365,23 @@ router.get("/:id/submissions", requireAuth, async (request, response) => {
   })) });
 });
 
+router.get("/:id/submissions/:submissionId/verification", requireAuth, async (request, response) => {
+  const commissionId = uuidSchema.parse(request.params.id);
+  const submissionId = uuidSchema.parse(request.params.submissionId);
+  const result = await pool.query<{
+    status: "passed" | "failed"; pack_hash: string; results: unknown; verified_at: Date;
+  }>(
+    `SELECT v.status, v.pack_hash, v.results, v.verified_at
+       FROM commission_submission_verifications v JOIN commissions c ON c.id = v.commission_id
+      WHERE v.commission_id = $1 AND v.submission_id = $2
+        AND (c.client_user_id = $3 OR c.provider_user_id = $3)`,
+    [commissionId, submissionId, request.auth!.userId],
+  );
+  if (!result.rowCount) throw new ApiError(404, "submission_verification_not_found", "No Proof Pack verification exists for this submission.");
+  const row = result.rows[0];
+  response.json({ data: { status: row.status, packHash: row.pack_hash, results: row.results, verifiedAt: row.verified_at } });
+});
+
 router.get("/:id/activity", requireAuth, async (request, response) => {
   const id = uuidSchema.parse(request.params.id);
   const member = await pool.query(

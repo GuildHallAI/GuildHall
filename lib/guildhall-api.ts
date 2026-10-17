@@ -26,6 +26,7 @@ export type ApiCommission = {
   escrowAddress?: string;
   termsHash?: string | null;
   termsAnchored?: boolean;
+  acceptancePack?: { version: 1; settlement: "manual_review" | "auto_release"; checks: { id: string; label: string; type: string; evidenceLabel?: string }[] } | null;
   createdAt: string;
   updatedAt: string;
 };

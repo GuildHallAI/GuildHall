@@ -3,6 +3,9 @@ import { z } from "zod";
 import { pool } from "./db/index.js";
 import { ApiError } from "./http.js";
 import { encryptPrivateData } from "./private-data.js";
+import { acceptancePackHash, acceptancePackSchema, verifyAcceptancePack } from "./acceptance-pack.js";
+import { openTribunalCase } from "./tribunal.js";
+import { settleCommission } from "./escrow-settlement.js";
 
 export const evidenceItemSchema = z.object({
   kind: z.enum(["url", "text", "hash", "image", "photo", "timestamp", "location_cell", "checklist"]),
@@ -28,6 +31,7 @@ type CommissionForSubmission = {
   work_type: string;
   accepted_at: Date | null;
   proof_schema: string[] | null;
+  acceptance_pack: unknown | null;
 };
 
 function validateHandsProof(required: string[], evidence: z.infer<typeof evidenceItemSchema>[]) {
@@ -75,7 +79,7 @@ export async function submitCommissionWork(commissionId: string, providerUserId:
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [commissionId]);
     const selected = await client.query<CommissionForSubmission>(
-      "SELECT id, provider_user_id, provider_agent_id, status, deadline_at, work_type, accepted_at, proof_schema FROM commissions WHERE id = $1 FOR UPDATE",
+      "SELECT id, provider_user_id, provider_agent_id, status, deadline_at, work_type, accepted_at, proof_schema, acceptance_pack FROM commissions WHERE id = $1 FOR UPDATE",
       [commissionId],
     );
     const commission = selected.rows[0];
@@ -124,10 +128,40 @@ export async function submitCommissionWork(commissionId: string, providerUserId:
         throw new ApiError(400, "submission_image_unavailable", "One or more images were not uploaded for this commission by its assigned provider.");
       }
     }
-    await client.query("UPDATE commissions SET status = 'submitted', updated_at = now() WHERE id = $1", [commissionId]);
+    let verification: ReturnType<typeof verifyAcceptancePack> | null = null;
+    let autoRelease = false;
+    let tribunalCaseId: string | null = null;
+    if (commission.acceptance_pack) {
+      const pack = acceptancePackSchema.parse(commission.acceptance_pack);
+      verification = verifyAcceptancePack(pack, input);
+      await client.query(
+        `INSERT INTO commission_submission_verifications (commission_id, submission_id, pack_hash, status, results)
+         VALUES ($1, $2, $3, $4, $5::jsonb)`,
+        [commissionId, inserted.rows[0].id, acceptancePackHash(pack), verification.status, JSON.stringify(verification.results)],
+      );
+      if (pack.settlement === "auto_release" && verification.status === "passed") {
+        autoRelease = true;
+        await client.query("UPDATE commissions SET status = 'approved', updated_at = now() WHERE id = $1", [commissionId]);
+      } else if (pack.settlement === "auto_release") {
+        const created = await client.query<{ id: string }>(
+          `INSERT INTO tribunal_cases (commission_id, opened_by, reason, evidence)
+           SELECT $1, client_user_id, $2, $3::jsonb FROM commissions WHERE id = $1 RETURNING id`,
+          [commissionId, "Proof Pack failed; settlement is held for Tribunal review.", JSON.stringify([{ submissionId: inserted.rows[0].id, acceptancePack: verification }])],
+        );
+        tribunalCaseId = created.rows[0].id;
+        await client.query("UPDATE commissions SET status = 'disputed', updated_at = now() WHERE id = $1", [commissionId]);
+      } else {
+        await client.query("UPDATE commissions SET status = 'submitted', updated_at = now() WHERE id = $1", [commissionId]);
+      }
+    } else {
+      await client.query("UPDATE commissions SET status = 'submitted', updated_at = now() WHERE id = $1", [commissionId]);
+    }
     await client.query("COMMIT");
+    const wardenAssigned = tribunalCaseId ? await openTribunalCase(tribunalCaseId).catch(() => false) : false;
+    const settlement = autoRelease ? await settleCommission(commissionId, "release") : null;
     return { id: inserted.rows[0].id, revision: inserted.rows[0].revision,
-      submitted_at: inserted.rows[0].submitted_at, summary: input.summary, evidence: input.evidence };
+      submitted_at: inserted.rows[0].submitted_at, summary: input.summary, evidence: input.evidence,
+      verification, tribunalCaseId, wardenAssigned, settlement };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
