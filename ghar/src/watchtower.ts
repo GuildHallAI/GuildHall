@@ -209,13 +209,15 @@ export function evaluateWatchCondition(trigger: WatchTrigger, snapshot: WatchSna
     `Absolute funding was ${multiple.toFixed(2)}x the 30-day median absolute funding, above the configured ${trigger.baselineMultiplier}x threshold.`);
 }
 
-async function evaluate(commission: WatchCommission, snapshot: MarketSnapshot, knownAlerts: Array<Pick<WatchAlert, "alertType">>) {
+async function evaluate(commission: WatchCommission, snapshot: MarketSnapshot, knownAlerts: Array<Pick<WatchAlert, "alertType" | "observedAt">>) {
   if (knownAlerts.length >= 500) return null;
   const now = Date.now();
   let state = marketStates.get(commission.id);
   if (!state) {
+    const latestAlertAt = knownAlerts.reduce((latest, alert) => Math.max(latest, new Date(alert.observedAt).getTime()), 0);
     state = { startedAt: now, lastObservedAt: now,
-      conditionReported: knownAlerts.some((alert) => alert.alertType === commission.watchTerms.trigger.type) };
+      conditionReported: knownAlerts.some((alert) => alert.alertType === commission.watchTerms.trigger.type),
+      ...(latestAlertAt ? { lastAlertedAt: latestAlertAt } : {}) };
     marketStates.set(commission.id, state);
   }
   const baseline = commission.watchTerms.trigger.type === "funding_spike"
